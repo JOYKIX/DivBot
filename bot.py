@@ -33,6 +33,7 @@ GUILD_ID = int(get_required_env("GUILD_ID"))
 COOLDOWN = 10
 CODE_EXPIRATION = 120
 WIN_POINTS = 10
+MAX_TEAM_MEMBERS_DISPLAY = 10
 ALLOWED_RULE_TYPES = {"contains", "emote"}
 DEFAULT_COLOR = discord.Color.blurple()
 SUCCESS_COLOR = discord.Color.green()
@@ -85,6 +86,7 @@ config = load_json("config.json", {"rules": []})
 
 cooldowns: dict[str, float] = {}
 pending_codes: dict[str, dict[str, Any]] = {}
+active_duel: dict[str, Any] | None = None
 
 
 def build_embed(title: str, description: str, color: discord.Color = DEFAULT_COLOR) -> discord.Embed:
@@ -131,6 +133,29 @@ def save_config() -> None:
 
 
 
+def normalize_team_data() -> None:
+    changed = False
+    for team_data in teams["teams"].values():
+        if "points" not in team_data:
+            team_data["points"] = 0
+            changed = True
+        if "emoji" not in team_data:
+            team_data["emoji"] = "🏷️"
+            changed = True
+        if "wins" not in team_data:
+            team_data["wins"] = 0
+            changed = True
+        if "losses" not in team_data:
+            team_data["losses"] = 0
+            changed = True
+
+    if changed:
+        save_teams()
+
+
+normalize_team_data()
+
+
 def cleanup_expired_codes() -> None:
     now = time.time()
     expired_codes = [
@@ -166,6 +191,37 @@ def is_known_team_role(role: discord.Role) -> bool:
 
 
 
+def get_team_entry_by_name(team_name: str) -> tuple[str, dict[str, Any]] | None:
+    normalized_name = team_name.strip().lower()
+    return next(
+        (
+            (stored_name, data)
+            for stored_name, data in teams["teams"].items()
+            if stored_name == normalized_name
+        ),
+        None,
+    )
+
+
+def get_team_entry_by_role(role: discord.Role) -> tuple[str, dict[str, Any]] | None:
+    return get_team_entry_by_name(role.name)
+
+
+def get_team_role(guild: discord.Guild, team_data: dict[str, Any]) -> discord.Role | None:
+    return guild.get_role(team_data["role_id"])
+
+
+def format_member_list(role: discord.Role) -> str:
+    if not role.members:
+        return "Aucun membre"
+
+    member_names = [member.display_name for member in role.members[:MAX_TEAM_MEMBERS_DISPLAY]]
+    extra_members = len(role.members) - len(member_names)
+    if extra_members > 0:
+        member_names.append(f"+{extra_members} autre(s)")
+    return ", ".join(member_names)
+
+
 def format_rules() -> str:
     if not config["rules"]:
         return "Aucune règle configurée pour le moment."
@@ -190,9 +246,109 @@ def leaderboard_lines(guild: discord.Guild) -> list[str]:
         if not role:
             continue
         lines.append(
-            f"**{index}.** {data['emoji']} **{role.name}** — `{data['points']} pts` • `{len(role.members)} joueurs`"
+            f"**{index}.** {data['emoji']} **{role.name}** — `{data['points']} pts` • "
+            f"`{data['wins']}V-{data['losses']}D` • `{len(role.members)} joueurs`"
         )
     return lines
+
+
+def team_overview_embed(guild: discord.Guild) -> discord.Embed:
+    embed = build_embed("Équipes enregistrées", "Vue détaillée des équipes.", INFO_COLOR)
+
+    sorted_teams = sorted(
+        teams["teams"].items(),
+        key=lambda item: (item[1]["points"], item[1]["wins"]),
+        reverse=True,
+    )
+
+    for _, data in sorted_teams:
+        role = get_team_role(guild, data)
+        if not role:
+            continue
+
+        embed.add_field(
+            name=f"{data['emoji']} {role.name}",
+            value=(
+                f"**Points** : `{data['points']}`\n"
+                f"**Bilan** : `{data['wins']} victoire(s)` / `{data['losses']} défaite(s)`\n"
+                f"**Membres** : {format_member_list(role)}"
+            ),
+            inline=False,
+        )
+
+    if not embed.fields:
+        embed.description = "Aucune équipe n'est configurée pour le moment."
+
+    return embed
+
+
+def start_duel(team_one_name: str, team_two_name: str, points: int) -> tuple[bool, str]:
+    global active_duel
+
+    if points <= 0:
+        return False, "Le nombre de points doit être supérieur à zéro."
+
+    if active_duel is not None:
+        return False, "Un duel est déjà en cours. Termine-le avec `!win <équipe>` avant d'en lancer un autre."
+
+    team_one = get_team_entry_by_name(team_one_name)
+    team_two = get_team_entry_by_name(team_two_name)
+
+    if team_one is None or team_two is None:
+        return False, "Une des équipes indiquées n'existe pas."
+
+    if team_one[0] == team_two[0]:
+        return False, "Tu dois choisir deux équipes différentes."
+
+    active_duel = {
+        "team_one": team_one[0],
+        "team_two": team_two[0],
+        "points": points,
+    }
+    return True, (
+        f"Duel lancé : **{team_one_name}** VS **{team_two_name}** pour **{points}** point(s). "
+        "Utilise `!win <équipe>` pour annoncer le gagnant."
+    )
+
+
+def resolve_duel(winner_name: str) -> tuple[bool, str]:
+    global active_duel
+
+    if active_duel is None:
+        return False, "Aucun duel n'est en cours."
+
+    winner = get_team_entry_by_name(winner_name)
+    if winner is None:
+        return False, "Cette équipe n'existe pas."
+
+    duel_teams = {active_duel["team_one"], active_duel["team_two"]}
+    if winner[0] not in duel_teams:
+        return False, "L'équipe gagnante doit faire partie du duel en cours."
+
+    loser_key = next(team_name for team_name in duel_teams if team_name != winner[0])
+    loser_data = teams["teams"][loser_key]
+    duel_points = active_duel["points"]
+
+    winner[1]["points"] += duel_points
+    winner[1]["wins"] += 1
+    loser_data["losses"] += 1
+    save_teams()
+
+    winner_display = winner[0].title()
+    loser_display = loser_key.title()
+    active_duel = None
+    return True, (
+        f"Victoire de **{winner_display}** ! +**{duel_points}** point(s). "
+        f"Défaite enregistrée pour **{loser_display}**."
+    )
+
+
+def is_twitch_admin(author: Any) -> bool:
+    return bool(
+        getattr(author, "is_broadcaster", False)
+        or getattr(author, "is_mod", False)
+        or getattr(author, "name", "").lower() == TWITCH_CHANNEL.lower()
+    )
 
 
 # ===== DISCORD BOT =====
@@ -307,9 +463,22 @@ async def rules(ctx: discord_commands.Context) -> None:
 
 @discord_bot.command(help="Afficher le classement des équipes")
 async def leaderboard(ctx: discord_commands.Context) -> None:
+    if ctx.guild is None:
+        await send_ctx_embed(ctx, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR)
+        return
+
     lines = leaderboard_lines(ctx.guild)
     description = "\n".join(lines) if lines else "Aucune équipe n'est configurée pour le moment."
     await ctx.send(embed=build_embed("Classement des équipes", description, INFO_COLOR))
+
+
+@discord_bot.command(help="Afficher le détail des équipes et de leurs membres")
+async def teamsinfo(ctx: discord_commands.Context) -> None:
+    if ctx.guild is None:
+        await send_ctx_embed(ctx, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR)
+        return
+
+    await ctx.send(embed=team_overview_embed(ctx.guild))
 
 
 # ===== DISCORD SLASH COMMANDS =====
@@ -425,7 +594,7 @@ async def slash_createteam(interaction: discord.Interaction, role: discord.Role,
         await send_interaction_embed(interaction, "Équipe existante", "Cette équipe existe déjà.", ERROR_COLOR, ephemeral=True)
         return
 
-    teams["teams"][name] = {"role_id": role.id, "points": 0, "emoji": emoji}
+    teams["teams"][name] = {"role_id": role.id, "points": 0, "emoji": emoji, "wins": 0, "losses": 0}
     save_teams()
     await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
 
@@ -471,17 +640,18 @@ async def slash_addpoints(interaction: discord.Interaction, role: discord.Role, 
 @app_commands.describe(role="Rôle de l'équipe gagnante")
 @app_commands.checks.has_permissions(manage_guild=True)
 async def slash_win(interaction: discord.Interaction, role: discord.Role) -> None:
-    name = role.name.lower()
-    if name not in teams["teams"]:
+    team_entry = get_team_entry_by_role(role)
+    if team_entry is None:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
         return
 
-    teams["teams"][name]["points"] += WIN_POINTS
+    team_entry[1]["points"] += WIN_POINTS
+    team_entry[1]["wins"] += 1
     save_teams()
     await send_interaction_embed(
         interaction,
         "Victoire enregistrée",
-        f"🔥 **{role.name}** gagne **{WIN_POINTS}** points.",
+        f"🔥 **{role.name}** gagne **{WIN_POINTS}** points et ajoute une victoire à son bilan.",
         SUCCESS_COLOR,
     )
 
@@ -496,6 +666,20 @@ async def slash_leaderboard(interaction: discord.Interaction) -> None:
     lines = leaderboard_lines(guild)
     description = "\n".join(lines) if lines else "Aucune équipe n'est configurée pour le moment."
     await send_interaction_embed(interaction, "Classement des équipes", description, INFO_COLOR)
+
+
+@discord_bot.tree.command(name="teams", description="Afficher les membres et les statistiques des équipes", guild=guild_object)
+async def slash_teams(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
+        return
+
+    embed = team_overview_embed(guild)
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed)
+        return
+    await interaction.response.send_message(embed=embed)
 
 
 @slash_addrule.error
@@ -548,6 +732,8 @@ class TwitchBot(twitch_commands.Bot):
                 await message.channel.send(f"{username}, impossible de t'envoyer un message privé")
             return
 
+        await self.handle_commands(message)
+
         now = time.time()
         if username in cooldowns and now - cooldowns[username] < COOLDOWN:
             return
@@ -563,6 +749,24 @@ class TwitchBot(twitch_commands.Bot):
                 await give_role(discord_id, rule["role"])
             elif rule["type"] == "emote" and message.tags.get("emotes") and rule["value"] in msg:
                 await give_role(discord_id, rule["role"])
+
+    @twitch_commands.command(name="duel")
+    async def duel_command(self, ctx: twitch_commands.Context, team_one: str, team_two: str, points: int) -> None:
+        if not is_twitch_admin(ctx.author):
+            await ctx.send("Seuls le streamer ou les modérateurs peuvent lancer un duel.")
+            return
+
+        _, message = start_duel(team_one, team_two, points)
+        await ctx.send(message)
+
+    @twitch_commands.command(name="win")
+    async def win_command(self, ctx: twitch_commands.Context, team_name: str) -> None:
+        if not is_twitch_admin(ctx.author):
+            await ctx.send("Seuls le streamer ou les modérateurs peuvent valider une victoire.")
+            return
+
+        _, message = resolve_duel(team_name)
+        await ctx.send(message)
 
 
 async def main() -> None:

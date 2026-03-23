@@ -10,8 +10,9 @@ Bot Discord + Twitch pour gérer :
 ### Côté Discord
 - réponses plus propres avec des **embeds** ;
 - **commandes slash** synchronisées sur le serveur (`GUILD_ID`) ;
-- conservation des commandes texte existantes principales (`!verify`, `!unlink`, `!rules`, `!leaderboard`) ;
+- conservation des commandes texte existantes principales (`!verify`, `!unlink`, `!rules`, `!leaderboard`, `!teamsinfo`) ;
 - messages d'erreur et de confirmation plus lisibles.
+- vue détaillée des équipes avec les membres et le bilan victoires/défaites.
 
 ### Commandes slash disponibles
 - `/verify`
@@ -24,6 +25,12 @@ Bot Discord + Twitch pour gérer :
 - `/addpoints`
 - `/win`
 - `/leaderboard`
+- `/teams`
+
+### Commandes Twitch disponibles
+- `!link`
+- `!duel <équipe1> <équipe2> <points>` pour lancer un duel entre deux équipes ;
+- `!win <équipe>` pour valider le gagnant du duel actif et enregistrer victoire/défaite.
 
 ## Librairies nécessaires
 
@@ -47,6 +54,7 @@ Le bot crée ou utilise ces fichiers JSON dans le dossier du projet :
 - `config.json`
 
 Ils sont générés automatiquement au premier lancement si besoin.
+`teams.json` conserve aussi les statistiques d'équipes : points, victoires et défaites.
 
 ## Configuration `.env`
 

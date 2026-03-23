@@ -1,23 +1,27 @@
-import json
 import asyncio
-import time
+import json
 import os
 import random
 import string
+import time
+from pathlib import Path
+from typing import Any
 
+import discord
+from discord import app_commands
+from discord.ext import commands as discord_commands
 from dotenv import load_dotenv
 from twitchio.ext import commands as twitch_commands
-import discord
-from discord.ext import commands as discord_commands
-
-# ===== LOAD ENV =====
-load_dotenv()
 
 
-def get_required_env(name):
+BASE_DIR = Path(__file__).parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def get_required_env(name: str) -> str:
     value = os.getenv(name)
     if value is None or not value.strip():
-        raise Exception(f"❌ Variable d'environnement manquante : {name}")
+        raise RuntimeError(f"Variable d'environnement manquante : {name}")
     return value.strip()
 
 
@@ -30,21 +34,48 @@ COOLDOWN = 10
 CODE_EXPIRATION = 120
 WIN_POINTS = 10
 ALLOWED_RULE_TYPES = {"contains", "emote"}
+DEFAULT_COLOR = discord.Color.blurple()
+SUCCESS_COLOR = discord.Color.green()
+ERROR_COLOR = discord.Color.red()
+WARNING_COLOR = discord.Color.orange()
+INFO_COLOR = discord.Color.gold()
+DATA_FILES: dict[str, Any] = {
+    "links.json": {},
+    "teams.json": {"teams": {}},
+    "config.json": {"rules": []},
+}
+
+
+def data_path(filename: str) -> Path:
+    return BASE_DIR / filename
 
 
 # ===== FILE UTILS =====
-def load_json(file, default):
+def load_json(filename: str, default: Any) -> Any:
+    path = data_path(filename)
     try:
-        with open(file, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         return default
 
 
 
-def save_json(file, data):
-    with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+def save_json(filename: str, data: Any) -> None:
+    path = data_path(filename)
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4, ensure_ascii=False)
+
+
+
+def ensure_data_files() -> None:
+    for filename, default_value in DATA_FILES.items():
+        path = data_path(filename)
+        if not path.exists():
+            save_json(filename, default_value)
+
+
+ensure_data_files()
 
 
 # ===== DATA =====
@@ -52,32 +83,149 @@ links = load_json("links.json", {})
 teams = load_json("teams.json", {"teams": {}})
 config = load_json("config.json", {"rules": []})
 
-cooldowns = {}
-pending_codes = {}
+cooldowns: dict[str, float] = {}
+pending_codes: dict[str, dict[str, Any]] = {}
+
+
+def build_embed(title: str, description: str, color: discord.Color = DEFAULT_COLOR) -> discord.Embed:
+    return discord.Embed(title=title, description=description, color=color)
+
+
+async def send_ctx_embed(ctx: discord_commands.Context, title: str, description: str, color: discord.Color) -> None:
+    await ctx.send(embed=build_embed(title, description, color))
+
+
+async def send_interaction_embed(
+    interaction: discord.Interaction,
+    title: str,
+    description: str,
+    color: discord.Color,
+    *,
+    ephemeral: bool = False,
+) -> None:
+    embed = build_embed(title, description, color)
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+        return
+    await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+
+
+# ===== UTILS =====
+def generate_code() -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+
+def save_teams() -> None:
+    save_json("teams.json", teams)
+
+
+
+def save_links() -> None:
+    save_json("links.json", links)
+
+
+
+def save_config() -> None:
+    save_json("config.json", config)
+
+
+
+def cleanup_expired_codes() -> None:
+    now = time.time()
+    expired_codes = [
+        code for code, data in pending_codes.items() if now > data["expires"]
+    ]
+
+    for code in expired_codes:
+        del pending_codes[code]
+
+
+
+def unlink_twitch_user(twitch_user: str) -> None:
+    links.pop(twitch_user, None)
+
+
+
+def unlink_discord_user(discord_id: int) -> list[str]:
+    linked_accounts = [
+        twitch_user
+        for twitch_user, linked_discord_id in links.items()
+        if linked_discord_id == discord_id
+    ]
+
+    for twitch_user in linked_accounts:
+        del links[twitch_user]
+
+    return linked_accounts
+
+
+
+def is_known_team_role(role: discord.Role) -> bool:
+    return role.id in [team["role_id"] for team in teams["teams"].values()]
+
+
+
+def format_rules() -> str:
+    if not config["rules"]:
+        return "Aucune règle configurée pour le moment."
+
+    lines = []
+    for index, rule in enumerate(config["rules"]):
+        lines.append(f"`{index}` • **{rule['type']}** → `{rule['value']}` → **{rule['role']}**")
+    return "\n".join(lines)
+
+
+
+def leaderboard_lines(guild: discord.Guild) -> list[str]:
+    sorted_teams = sorted(
+        teams["teams"].items(),
+        key=lambda item: item[1]["points"],
+        reverse=True,
+    )
+
+    lines = []
+    for index, (_, data) in enumerate(sorted_teams, start=1):
+        role = guild.get_role(data["role_id"])
+        if not role:
+            continue
+        lines.append(
+            f"**{index}.** {data['emoji']} **{role.name}** — `{data['points']} pts` • `{len(role.members)} joueurs`"
+        )
+    return lines
 
 
 # ===== DISCORD BOT =====
 intents = discord.Intents.all()
+guild_object = discord.Object(id=GUILD_ID)
 
 
 class DiscordBot(discord_commands.Bot):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(command_prefix="!", intents=intents)
+        self.synced = False
 
-    async def on_ready(self):
+    async def setup_hook(self) -> None:
+        self.tree.copy_global_to(guild=guild_object)
+
+    async def on_ready(self) -> None:
+        if not self.synced:
+            synced_commands = await self.tree.sync(guild=guild_object)
+            print(f"[DISCORD] {len(synced_commands)} commandes slash synchronisées sur {GUILD_ID}")
+            self.synced = True
         print(f"[DISCORD] Connecté : {self.user}")
 
-    async def on_command_error(self, ctx, error):
+    async def on_command_error(self, ctx: discord_commands.Context, error: Exception) -> None:
         if isinstance(error, discord_commands.MissingPermissions):
-            await ctx.send("❌ Tu n'as pas la permission d'utiliser cette commande")
+            await send_ctx_embed(ctx, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR)
             return
 
         if isinstance(error, discord_commands.MissingRequiredArgument):
-            await ctx.send("❌ Argument manquant pour cette commande")
+            await send_ctx_embed(ctx, "Argument manquant", "Il manque un argument pour cette commande.", ERROR_COLOR)
             return
 
         if isinstance(error, discord_commands.BadArgument):
-            await ctx.send("❌ Argument invalide")
+            await send_ctx_embed(ctx, "Argument invalide", "Un des arguments fournis est invalide.", ERROR_COLOR)
             return
 
         if isinstance(error, discord_commands.CommandNotFound):
@@ -90,79 +238,35 @@ class DiscordBot(discord_commands.Bot):
 discord_bot = DiscordBot()
 
 
-# ===== UTILS =====
-def generate_code():
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
-
-
-def save_teams():
-    save_json("teams.json", teams)
-
-
-
-def save_links():
-    save_json("links.json", links)
-
-
-
-def cleanup_expired_codes():
-    now = time.time()
-    expired_codes = [
-        code for code, data in pending_codes.items()
-        if now > data["expires"]
-    ]
-
-    for code in expired_codes:
-        del pending_codes[code]
-
-
-
-def unlink_twitch_user(twitch_user):
-    links.pop(twitch_user, None)
-
-
-
-def unlink_discord_user(discord_id):
-    linked_accounts = [
-        twitch_user for twitch_user, linked_discord_id in links.items()
-        if linked_discord_id == discord_id
-    ]
-
-    for twitch_user in linked_accounts:
-        del links[twitch_user]
-
-    return linked_accounts
-
-
 # ===== ROLE UTILS =====
-async def give_role(discord_id, role_name):
+async def give_role(discord_id: int, role_name: str) -> bool:
     guild = discord_bot.get_guild(GUILD_ID)
     if not guild:
-        return
+        return False
 
     member = guild.get_member(discord_id)
     if not member:
-        return
+        return False
 
     role = discord.utils.get(guild.roles, name=role_name)
     if not role:
-        return
+        return False
 
     if role not in member.roles:
-        await member.add_roles(role)
+        await member.add_roles(role, reason="Attribution automatique via règle Twitch")
+        return True
+
+    return False
 
 
-# ===== DISCORD COMMANDS =====
-
-# 🔗 VERIFY
-@discord_bot.command()
-async def verify(ctx, code: str):
+# ===== DISCORD PREFIX COMMANDS =====
+@discord_bot.command(help="Associer ton compte Discord avec un code Twitch")
+async def verify(ctx: discord_commands.Context, code: str) -> None:
     cleanup_expired_codes()
     code = code.upper()
 
     if code not in pending_codes:
-        await ctx.send("❌ Code invalide")
+        await send_ctx_embed(ctx, "Code invalide", "Le code fourni est invalide ou expiré.", ERROR_COLOR)
         return
 
     data = pending_codes[code]
@@ -175,233 +279,296 @@ async def verify(ctx, code: str):
 
     del pending_codes[code]
 
-    await ctx.send(f"✅ Compte lié à {twitch_user}")
+    await send_ctx_embed(
+        ctx,
+        "Compte lié",
+        f"Ton compte Discord est maintenant lié à **{twitch_user}**.",
+        SUCCESS_COLOR,
+    )
 
 
-@discord_bot.command()
-async def unlink(ctx):
+@discord_bot.command(help="Supprimer le lien entre Twitch et Discord")
+async def unlink(ctx: discord_commands.Context) -> None:
     removed_accounts = unlink_discord_user(ctx.author.id)
 
     if not removed_accounts:
-        await ctx.send("❌ Aucun compte Twitch lié à ton compte Discord")
+        await send_ctx_embed(ctx, "Aucune liaison", "Aucun compte Twitch n'est lié à ton compte Discord.", WARNING_COLOR)
         return
 
     save_links()
     removed_list = ", ".join(removed_accounts)
-    await ctx.send(f"🔓 Liaison supprimée : {removed_list}")
+    await send_ctx_embed(ctx, "Liaison supprimée", f"Compte(s) déliés : **{removed_list}**.", SUCCESS_COLOR)
 
 
-# ===== RULE SYSTEM =====
-@discord_bot.command()
-@discord_commands.has_permissions(manage_guild=True)
-async def addrule(ctx, trigger_type, value, role_name):
+@discord_bot.command(help="Afficher toutes les règles Twitch → Discord")
+async def rules(ctx: discord_commands.Context) -> None:
+    await ctx.send(embed=build_embed("Règles configurées", format_rules(), INFO_COLOR))
+
+
+@discord_bot.command(help="Afficher le classement des équipes")
+async def leaderboard(ctx: discord_commands.Context) -> None:
+    lines = leaderboard_lines(ctx.guild)
+    description = "\n".join(lines) if lines else "Aucune équipe n'est configurée pour le moment."
+    await ctx.send(embed=build_embed("Classement des équipes", description, INFO_COLOR))
+
+
+# ===== DISCORD SLASH COMMANDS =====
+@discord_bot.tree.command(name="verify", description="Associer ton compte Discord avec un code Twitch", guild=guild_object)
+@app_commands.describe(code="Code envoyé par le bot Twitch")
+async def slash_verify(interaction: discord.Interaction, code: str) -> None:
+    cleanup_expired_codes()
+    code = code.upper()
+
+    if code not in pending_codes:
+        await send_interaction_embed(interaction, "Code invalide", "Le code fourni est invalide ou expiré.", ERROR_COLOR, ephemeral=True)
+        return
+
+    data = pending_codes[code]
+    twitch_user = data["user"]
+
+    unlink_twitch_user(twitch_user)
+    unlink_discord_user(interaction.user.id)
+    links[twitch_user] = interaction.user.id
+    save_links()
+    del pending_codes[code]
+
+    await send_interaction_embed(
+        interaction,
+        "Compte lié",
+        f"Ton compte Discord est maintenant lié à **{twitch_user}**.",
+        SUCCESS_COLOR,
+        ephemeral=True,
+    )
+
+
+@discord_bot.tree.command(name="unlink", description="Supprimer la liaison avec ton compte Twitch", guild=guild_object)
+async def slash_unlink(interaction: discord.Interaction) -> None:
+    removed_accounts = unlink_discord_user(interaction.user.id)
+
+    if not removed_accounts:
+        await send_interaction_embed(interaction, "Aucune liaison", "Aucun compte Twitch n'est lié à ton compte Discord.", WARNING_COLOR, ephemeral=True)
+        return
+
+    save_links()
+    await send_interaction_embed(
+        interaction,
+        "Liaison supprimée",
+        f"Compte(s) déliés : **{', '.join(removed_accounts)}**.",
+        SUCCESS_COLOR,
+        ephemeral=True,
+    )
+
+
+@discord_bot.tree.command(name="addrule", description="Ajouter une règle Twitch vers un rôle Discord", guild=guild_object)
+@app_commands.describe(trigger_type="contains ou emote", value="Mot-clé ou emote", role_name="Nom exact du rôle à donner")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_addrule(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
     trigger_type = trigger_type.lower()
-
     if trigger_type not in ALLOWED_RULE_TYPES:
-        allowed_types = ", ".join(sorted(ALLOWED_RULE_TYPES))
-        await ctx.send(f"❌ Type invalide. Types autorisés : {allowed_types}")
+        await send_interaction_embed(
+            interaction,
+            "Type invalide",
+            f"Types autorisés : **{', '.join(sorted(ALLOWED_RULE_TYPES))}**.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
         return
 
-    rule = {
-        "type": trigger_type,
-        "value": value,
-        "action": "give_role",
-        "role": role_name,
-    }
+    config["rules"].append(
+        {
+            "type": trigger_type,
+            "value": value,
+            "action": "give_role",
+            "role": role_name,
+        }
+    )
+    save_config()
 
-    config["rules"].append(rule)
-    save_json("config.json", config)
-
-    await ctx.send(f"✅ Règle ajoutée : {trigger_type} → {value} → {role_name}")
-
-
-@discord_bot.command()
-async def rules(ctx):
-    if not config["rules"]:
-        await ctx.send("❌ Aucune règle")
-        return
-
-    msg = "📋 Règles :\n"
-    for i, r in enumerate(config["rules"]):
-        msg += f"{i} | {r['type']} : {r['value']} → {r['role']}\n"
-
-    await ctx.send(msg)
+    await send_interaction_embed(
+        interaction,
+        "Règle ajoutée",
+        f"Nouvelle règle : **{trigger_type}** → `{value}` → **{role_name}**.",
+        SUCCESS_COLOR,
+    )
 
 
-@discord_bot.command()
-@discord_commands.has_permissions(manage_guild=True)
-async def delrule(ctx, index: int):
+@discord_bot.tree.command(name="rules", description="Afficher les règles configurées", guild=guild_object)
+async def slash_rules(interaction: discord.Interaction) -> None:
+    await send_interaction_embed(interaction, "Règles configurées", format_rules(), INFO_COLOR, ephemeral=True)
+
+
+@discord_bot.tree.command(name="delrule", description="Supprimer une règle par son index", guild=guild_object)
+@app_commands.describe(index="Index visible dans /rules")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_delrule(interaction: discord.Interaction, index: int) -> None:
     try:
         removed = config["rules"].pop(index)
-        save_json("config.json", config)
-        await ctx.send(f"🗑️ Supprimé : {removed}")
     except IndexError:
-        await ctx.send("❌ Index invalide")
+        await send_interaction_embed(interaction, "Index invalide", "Aucune règle ne correspond à cet index.", ERROR_COLOR, ephemeral=True)
+        return
+
+    save_config()
+    await send_interaction_embed(
+        interaction,
+        "Règle supprimée",
+        f"Suppression de **{removed['type']}** → `{removed['value']}` → **{removed['role']}**.",
+        SUCCESS_COLOR,
+    )
 
 
-# ===== TEAM SYSTEM =====
-@discord_bot.command()
-@discord_commands.has_permissions(manage_guild=True)
-async def createteam(ctx, role: discord.Role, emoji):
+@discord_bot.tree.command(name="createteam", description="Créer une équipe à partir d'un rôle Discord", guild=guild_object)
+@app_commands.describe(role="Rôle représentant l'équipe", emoji="Emoji affiché dans le classement")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_createteam(interaction: discord.Interaction, role: discord.Role, emoji: str) -> None:
     name = role.name.lower()
-
     if name in teams["teams"]:
-        await ctx.send("❌ Cette équipe existe déjà")
+        await send_interaction_embed(interaction, "Équipe existante", "Cette équipe existe déjà.", ERROR_COLOR, ephemeral=True)
         return
 
-    teams["teams"][name] = {
-        "role_id": role.id,
-        "points": 0,
-        "emoji": emoji,
-    }
-
+    teams["teams"][name] = {"role_id": role.id, "points": 0, "emoji": emoji}
     save_teams()
+    await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
 
-    await ctx.send(f"✅ Équipe créée : {emoji} {role.name}")
 
-
-@discord_bot.command()
-async def join(ctx, role: discord.Role):
-    user = ctx.author
-
-    team_roles = [t["role_id"] for t in teams["teams"].values()]
-
-    if role.id not in team_roles:
-        await ctx.send("❌ Ce rôle n'est pas une équipe")
+@discord_bot.tree.command(name="join", description="Rejoindre une équipe", guild=guild_object)
+@app_commands.describe(role="Rôle de l'équipe à rejoindre")
+async def slash_join(interaction: discord.Interaction, role: discord.Role) -> None:
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
         return
 
-    roles_to_remove = [r for r in user.roles if r.id in team_roles and r != role]
+    if not is_known_team_role(role):
+        await send_interaction_embed(interaction, "Équipe introuvable", "Ce rôle n'est pas enregistré comme équipe.", ERROR_COLOR, ephemeral=True)
+        return
+
+    team_roles = [team["role_id"] for team in teams["teams"].values()]
+    roles_to_remove = [existing_role for existing_role in member.roles if existing_role.id in team_roles and existing_role != role]
 
     if roles_to_remove:
-        await user.remove_roles(*roles_to_remove)
+        await member.remove_roles(*roles_to_remove, reason="Changement d'équipe")
+    if role not in member.roles:
+        await member.add_roles(role, reason="Rejoint une équipe")
 
-    if role not in user.roles:
-        await user.add_roles(role)
-
-    await ctx.send(f"✅ Tu as rejoint {role.name}")
+    await send_interaction_embed(interaction, "Équipe rejointe", f"Tu as rejoint **{role.name}**.", SUCCESS_COLOR, ephemeral=True)
 
 
-@discord_bot.command()
-@discord_commands.has_permissions(manage_guild=True)
-async def addpoints(ctx, role: discord.Role, amount: int):
+@discord_bot.tree.command(name="addpoints", description="Ajouter des points à une équipe", guild=guild_object)
+@app_commands.describe(role="Rôle de l'équipe", amount="Nombre de points à ajouter")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_addpoints(interaction: discord.Interaction, role: discord.Role, amount: int) -> None:
     name = role.name.lower()
-
     if name not in teams["teams"]:
-        await ctx.send("❌ Équipe introuvable")
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
         return
 
     teams["teams"][name]["points"] += amount
     save_teams()
+    await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
-    await ctx.send(f"🏆 {role.name} +{amount} points")
 
-
-@discord_bot.command()
-@discord_commands.has_permissions(manage_guild=True)
-async def win(ctx, role: discord.Role):
+@discord_bot.tree.command(name="win", description="Attribuer une victoire à une équipe", guild=guild_object)
+@app_commands.describe(role="Rôle de l'équipe gagnante")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_win(interaction: discord.Interaction, role: discord.Role) -> None:
     name = role.name.lower()
-
     if name not in teams["teams"]:
-        await ctx.send("❌ Équipe introuvable")
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
         return
 
     teams["teams"][name]["points"] += WIN_POINTS
     save_teams()
-
-    await ctx.send(f"🔥 Victoire pour {role.name} (+{WIN_POINTS} pts)")
-
-
-@discord_bot.command()
-async def leaderboard(ctx):
-    guild = ctx.guild
-
-    sorted_teams = sorted(
-        teams["teams"].items(),
-        key=lambda x: x[1]["points"],
-        reverse=True,
+    await send_interaction_embed(
+        interaction,
+        "Victoire enregistrée",
+        f"🔥 **{role.name}** gagne **{WIN_POINTS}** points.",
+        SUCCESS_COLOR,
     )
 
-    msg = "🏆 **Classement des équipes** 🏆\n\n"
 
-    for i, (_, data) in enumerate(sorted_teams, start=1):
-        role = guild.get_role(data["role_id"])
+@discord_bot.tree.command(name="leaderboard", description="Afficher le classement des équipes", guild=guild_object)
+async def slash_leaderboard(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
+        return
 
-        if role:
-            msg += (
-                f"{i}. {data['emoji']} **{role.name}** — {data['points']} pts "
-                f"({len(role.members)} joueurs)\n"
-            )
+    lines = leaderboard_lines(guild)
+    description = "\n".join(lines) if lines else "Aucune équipe n'est configurée pour le moment."
+    await send_interaction_embed(interaction, "Classement des équipes", description, INFO_COLOR)
 
-    await ctx.send(msg)
+
+@slash_addrule.error
+@slash_delrule.error
+@slash_createteam.error
+@slash_addpoints.error
+@slash_win.error
+async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    if isinstance(error, app_commands.MissingPermissions):
+        await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)
+        return
+    raise error
 
 
 # ===== TWITCH BOT =====
 class TwitchBot(twitch_commands.Bot):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(
             token=TWITCH_TOKEN,
             prefix="!",
             initial_channels=[TWITCH_CHANNEL],
         )
 
-    async def event_ready(self):
+    async def event_ready(self) -> None:
         print(f"[TWITCH] Connecté : {self.nick}")
 
-    async def event_message(self, message):
+    async def event_message(self, message) -> None:
         if message.echo:
             return
 
         username = message.author.name.lower()
         msg = message.content
 
-        # ===== LINK =====
         if msg.lower().startswith("!link"):
             cleanup_expired_codes()
             code = generate_code()
-
             pending_codes[code] = {
                 "user": username,
                 "expires": time.time() + CODE_EXPIRATION,
             }
 
             if username == TWITCH_CHANNEL.lower():
-                await message.channel.send(f"{username}, code : {code} | !verify {code}")
+                await message.channel.send(f"{username}, code : {code} | utilise /verify {code} sur Discord")
                 return
 
             try:
-                await message.author.send(f"🔐 Code : {code} | !verify {code} sur Discord")
+                await message.author.send(f"🔐 Code : {code} | utilise /verify {code} sur Discord")
                 await message.channel.send(f"{username}, regarde tes messages privés 👍")
-            except discord.Forbidden:
+            except Exception:
                 await message.channel.send(f"{username}, impossible de t'envoyer un message privé")
-
             return
 
-        # ===== COOLDOWN =====
         now = time.time()
         if username in cooldowns and now - cooldowns[username] < COOLDOWN:
             return
 
         cooldowns[username] = now
 
-        # ===== RULE ENGINE =====
         if username not in links:
             return
 
         discord_id = links[username]
-
         for rule in config["rules"]:
             if rule["type"] == "contains" and rule["value"].lower() in msg.lower():
                 await give_role(discord_id, rule["role"])
-            elif rule["type"] == "emote":
-                if message.tags.get("emotes") and rule["value"] in msg:
-                    await give_role(discord_id, rule["role"])
+            elif rule["type"] == "emote" and message.tags.get("emotes") and rule["value"] in msg:
+                await give_role(discord_id, rule["role"])
 
 
-# ===== RUN =====
-twitch_bot = TwitchBot()
+async def main() -> None:
+    twitch_bot = TwitchBot()
+    await asyncio.gather(discord_bot.start(DISCORD_TOKEN), twitch_bot.start())
 
-loop = asyncio.get_event_loop()
-loop.create_task(discord_bot.start(DISCORD_TOKEN))
-loop.create_task(twitch_bot.start())
 
-loop.run_forever()
+if __name__ == "__main__":
+    asyncio.run(main())

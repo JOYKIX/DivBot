@@ -219,6 +219,11 @@ def get_team_role(guild: discord.Guild, team_data: dict[str, Any]) -> discord.Ro
     return guild.get_role(team_data["role_id"])
 
 
+def get_member_team_roles(member: discord.Member) -> list[discord.Role]:
+    team_role_ids = {team["role_id"] for team in teams["teams"].values()}
+    return [role for role in member.roles if role.id in team_role_ids]
+
+
 def format_member_list(role: discord.Role) -> str:
     if not role.members:
         return "Aucun membre"
@@ -669,11 +674,17 @@ async def slash_join(interaction: discord.Interaction, role: discord.Role) -> No
         await send_interaction_embed(interaction, "Équipe introuvable", "Ce rôle n'est pas enregistré comme équipe.", ERROR_COLOR, ephemeral=True)
         return
 
-    team_roles = [team["role_id"] for team in teams["teams"].values()]
-    roles_to_remove = [existing_role for existing_role in member.roles if existing_role.id in team_roles and existing_role != role]
+    current_team_roles = [existing_role for existing_role in get_member_team_roles(member) if existing_role != role]
+    if current_team_roles:
+        await send_interaction_embed(
+            interaction,
+            "Déjà dans une équipe",
+            f"Tu es déjà dans **{current_team_roles[0].name}**. Quitte ton équipe actuelle avant d'en rejoindre une autre.",
+            WARNING_COLOR,
+            ephemeral=True,
+        )
+        return
 
-    if roles_to_remove:
-        await member.remove_roles(*roles_to_remove, reason="Changement d'équipe")
     if role not in member.roles:
         await member.add_roles(role, reason="Rejoint une équipe")
 

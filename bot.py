@@ -104,12 +104,13 @@ async def send_interaction_embed(
     color: discord.Color,
     *,
     ephemeral: bool = False,
+    view: discord.ui.View | None = None,
 ) -> None:
     embed = build_embed(title, description, color)
     if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+        await interaction.followup.send(embed=embed, ephemeral=ephemeral, view=view)
         return
-    await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+    await interaction.response.send_message(embed=embed, ephemeral=ephemeral, view=view)
 
 
 def is_discord_moderator(interaction: discord.Interaction) -> bool:
@@ -583,9 +584,32 @@ class LinkAccountView(discord.ui.View):
                 f"`{code}`\n\n"
                 "Écris ce message dans le chat Twitch pour finaliser : "
                 f"`!link {code}`\n"
+                "➡️ Utilise le bouton **Copier la commande** pour obtenir un message prêt à copier sur mobile.\n"
                 f"⏱️ Le code expire dans **{CODE_EXPIRATION} secondes**."
             ),
             INFO_COLOR,
+            ephemeral=True,
+            view=LinkCodeView(code),
+        )
+
+
+class LinkCodeView(discord.ui.View):
+    def __init__(self, code: str) -> None:
+        super().__init__(timeout=CODE_EXPIRATION)
+        self.command = f"!link {code}"
+
+    @discord.ui.button(
+        label="Copier la commande",
+        style=discord.ButtonStyle.secondary,
+        emoji="📋",
+    )
+    async def copy_link_command(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_message(
+            (
+                "Commande prête à copier :\n"
+                f"`{self.command}`\n\n"
+                "💡 Astuce mobile : appui long sur le message pour copier."
+            ),
             ephemeral=True,
         )
 

@@ -605,11 +605,7 @@ class LinkCodeView(discord.ui.View):
     )
     async def copy_link_command(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await interaction.response.send_message(
-            (
-                "Commande prête à copier :\n"
-                f"`{self.command}`\n\n"
-                "💡 Astuce mobile : appui long sur le message pour copier."
-            ),
+            self.command,
             ephemeral=True,
         )
 

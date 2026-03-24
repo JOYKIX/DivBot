@@ -414,6 +414,21 @@ class LinkAccountView(discord.ui.View):
         custom_id="link_discord_twitch",
     )
     async def link_accounts_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        linked_accounts = [
+            twitch_user
+            for twitch_user, linked_discord_id in links.items()
+            if linked_discord_id == interaction.user.id
+        ]
+        if linked_accounts:
+            await send_interaction_embed(
+                interaction,
+                "Compte déjà lié",
+                f"Ton compte Discord est déjà lié à **{', '.join(linked_accounts)}**.",
+                WARNING_COLOR,
+                ephemeral=True,
+            )
+            return
+
         cleanup_expired_codes()
         remove_pending_codes_for_discord_user(interaction.user.id)
 

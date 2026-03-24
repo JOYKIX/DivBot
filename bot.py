@@ -32,7 +32,6 @@ GUILD_ID = int(get_required_env("GUILD_ID"))
 
 COOLDOWN = 10
 CODE_EXPIRATION = 120
-WIN_POINTS = 10
 MAX_TEAM_MEMBERS_DISPLAY = 10
 MAX_TEAM_MEMBERS_DETAIL = 25
 ALLOWED_RULE_TYPES = {"contains", "emote"}
@@ -111,6 +110,24 @@ async def send_interaction_embed(
         await interaction.followup.send(embed=embed, ephemeral=ephemeral)
         return
     await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+
+
+def is_discord_moderator(interaction: discord.Interaction) -> bool:
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        return False
+
+    permissions = member.guild_permissions
+    return any(
+        (
+            permissions.administrator,
+            permissions.manage_guild,
+            permissions.manage_roles,
+            permissions.moderate_members,
+            permissions.kick_members,
+            permissions.ban_members,
+        )
+    )
 
 
 # ===== UTILS =====
@@ -195,11 +212,6 @@ def unlink_discord_user(discord_id: int) -> list[str]:
 
 
 
-def is_known_team_role(role: discord.Role) -> bool:
-    return role.id in [team["role_id"] for team in teams["teams"].values()]
-
-
-
 def get_team_entry_by_name(team_name: str) -> tuple[str, dict[str, Any]] | None:
     normalized_name = team_name.strip().lower()
     return next(
@@ -218,11 +230,6 @@ def get_team_entry_by_role(role: discord.Role) -> tuple[str, dict[str, Any]] | N
 
 def get_team_role(guild: discord.Guild, team_data: dict[str, Any]) -> discord.Role | None:
     return guild.get_role(team_data["role_id"])
-
-
-def get_member_team_roles(member: discord.Member) -> list[discord.Role]:
-    team_role_ids = {team["role_id"] for team in teams["teams"].values()}
-    return [role for role in member.roles if role.id in team_role_ids]
 
 
 def format_member_list(role: discord.Role) -> str:
@@ -677,7 +684,7 @@ async def slash_unlink(interaction: discord.Interaction) -> None:
     description="Publier l'embed avec bouton de liaison Discord ↔ Twitch",
     guild=guild_object,
 )
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.check(is_discord_moderator)
 async def slash_linkpanel(interaction: discord.Interaction) -> None:
     if interaction.channel is None:
         await send_interaction_embed(interaction, "Erreur", "Salon introuvable.", ERROR_COLOR, ephemeral=True)
@@ -698,7 +705,7 @@ async def slash_linkpanel(interaction: discord.Interaction) -> None:
 
 @discord_bot.tree.command(name="addrule", description="Ajouter une règle Twitch vers un rôle Discord", guild=guild_object)
 @app_commands.describe(trigger_type="contains ou emote", value="Mot-clé ou emote", role_name="Nom exact du rôle à donner")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.check(is_discord_moderator)
 async def slash_addrule(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
     trigger_type = trigger_type.lower()
     if trigger_type not in ALLOWED_RULE_TYPES:
@@ -736,7 +743,7 @@ async def slash_rules(interaction: discord.Interaction) -> None:
 
 @discord_bot.tree.command(name="delrule", description="Supprimer une règle par son index", guild=guild_object)
 @app_commands.describe(index="Index visible dans /rules")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.check(is_discord_moderator)
 async def slash_delrule(interaction: discord.Interaction, index: int) -> None:
     try:
         removed = config["rules"].pop(index)
@@ -755,7 +762,7 @@ async def slash_delrule(interaction: discord.Interaction, index: int) -> None:
 
 @discord_bot.tree.command(name="createteam", description="Créer une équipe à partir d'un rôle Discord", guild=guild_object)
 @app_commands.describe(role="Rôle représentant l'équipe", emoji="Emoji affiché dans le classement")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.check(is_discord_moderator)
 async def slash_createteam(interaction: discord.Interaction, role: discord.Role, emoji: str) -> None:
     name = role.name.lower()
     if name in teams["teams"]:
@@ -767,38 +774,9 @@ async def slash_createteam(interaction: discord.Interaction, role: discord.Role,
     await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
 
 
-@discord_bot.tree.command(name="join", description="Rejoindre une équipe", guild=guild_object)
-@app_commands.describe(role="Rôle de l'équipe à rejoindre")
-async def slash_join(interaction: discord.Interaction, role: discord.Role) -> None:
-    member = interaction.user
-    if not isinstance(member, discord.Member):
-        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
-        return
-
-    if not is_known_team_role(role):
-        await send_interaction_embed(interaction, "Équipe introuvable", "Ce rôle n'est pas enregistré comme équipe.", ERROR_COLOR, ephemeral=True)
-        return
-
-    current_team_roles = [existing_role for existing_role in get_member_team_roles(member) if existing_role != role]
-    if current_team_roles:
-        await send_interaction_embed(
-            interaction,
-            "Déjà dans une équipe",
-            f"Tu es déjà dans **{current_team_roles[0].name}**. Quitte ton équipe actuelle avant d'en rejoindre une autre.",
-            WARNING_COLOR,
-            ephemeral=True,
-        )
-        return
-
-    if role not in member.roles:
-        await member.add_roles(role, reason="Rejoint une équipe")
-
-    await send_interaction_embed(interaction, "Équipe rejointe", f"Tu as rejoint **{role.name}**.", SUCCESS_COLOR, ephemeral=True)
-
-
 @discord_bot.tree.command(name="addpoints", description="Ajouter des points à une équipe", guild=guild_object)
 @app_commands.describe(role="Rôle de l'équipe", amount="Nombre de points à ajouter")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.check(is_discord_moderator)
 async def slash_addpoints(interaction: discord.Interaction, role: discord.Role, amount: int) -> None:
     name = role.name.lower()
     if name not in teams["teams"]:
@@ -808,26 +786,6 @@ async def slash_addpoints(interaction: discord.Interaction, role: discord.Role, 
     teams["teams"][name]["points"] += amount
     save_teams()
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
-
-
-@discord_bot.tree.command(name="win", description="Attribuer une victoire à une équipe", guild=guild_object)
-@app_commands.describe(role="Rôle de l'équipe gagnante")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def slash_win(interaction: discord.Interaction, role: discord.Role) -> None:
-    team_entry = get_team_entry_by_role(role)
-    if team_entry is None:
-        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
-        return
-
-    team_entry[1]["points"] += WIN_POINTS
-    team_entry[1]["wins"] += 1
-    save_teams()
-    await send_interaction_embed(
-        interaction,
-        "Victoire enregistrée",
-        f"🔥 **{role.name}** gagne **{WIN_POINTS}** points et ajoute une victoire à son bilan.",
-        SUCCESS_COLOR,
-    )
 
 
 @discord_bot.tree.command(name="leaderboard", description="Afficher le classement des équipes", guild=guild_object)
@@ -879,9 +837,8 @@ async def slash_team(interaction: discord.Interaction, role: discord.Role) -> No
 @slash_delrule.error
 @slash_createteam.error
 @slash_addpoints.error
-@slash_win.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
-    if isinstance(error, app_commands.MissingPermissions):
+    if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
         await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)
         return
     raise error

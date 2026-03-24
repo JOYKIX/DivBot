@@ -776,8 +776,8 @@ class TwitchBot(twitch_commands.Bot):
             links[username] = discord_id
             save_links()
             del pending_codes[code]
-
-            await message.channel.send(f"{username}, ton compte Twitch est maintenant lié à ton Discord ✅")
+            await self.delete_twitch_message(message)
+            await self.send_link_confirmation_dm(discord_id, username)
             return
 
         await self.handle_commands(message)
@@ -815,6 +815,31 @@ class TwitchBot(twitch_commands.Bot):
 
         _, message = resolve_duel(team_name)
         await ctx.send(message)
+
+    async def delete_twitch_message(self, message) -> None:
+        message_id = message.tags.get("id")
+        if not message_id:
+            return
+        await message.channel.send(f"/delete {message_id}")
+
+    async def send_link_confirmation_dm(self, discord_id: int, twitch_username: str) -> None:
+        user = discord_bot.get_user(discord_id)
+        if user is None:
+            try:
+                user = await discord_bot.fetch_user(discord_id)
+            except discord.HTTPException:
+                return
+
+        try:
+            await user.send(
+                embed=build_embed(
+                    "Compte lié ✅",
+                    f"Ton compte Twitch **{twitch_username}** est maintenant lié à ton compte Discord.",
+                    SUCCESS_COLOR,
+                )
+            )
+        except discord.Forbidden:
+            return
 
 
 async def main() -> None:

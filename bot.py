@@ -34,6 +34,7 @@ COOLDOWN = 10
 CODE_EXPIRATION = 120
 WIN_POINTS = 10
 MAX_TEAM_MEMBERS_DISPLAY = 10
+MAX_TEAM_MEMBERS_DETAIL = 25
 ALLOWED_RULE_TYPES = {"contains", "emote"}
 DEFAULT_COLOR = discord.Color.blurple()
 SUCCESS_COLOR = discord.Color.green()
@@ -265,6 +266,65 @@ def leaderboard_lines(guild: discord.Guild) -> list[str]:
     return lines
 
 
+def placement_emoji(position: int) -> str:
+    if position == 1:
+        return "🥇"
+    if position == 2:
+        return "🥈"
+    if position == 3:
+        return "🥉"
+    return "🏅"
+
+
+def team_winrate(team_data: dict[str, Any]) -> float:
+    total_matches = team_data["wins"] + team_data["losses"]
+    if total_matches <= 0:
+        return 0.0
+    return (team_data["wins"] / total_matches) * 100
+
+
+def leaderboard_embed(guild: discord.Guild) -> discord.Embed:
+    sorted_teams = sorted(
+        teams["teams"].items(),
+        key=lambda item: (item[1]["points"], item[1]["wins"]),
+        reverse=True,
+    )
+
+    if not sorted_teams:
+        return build_embed("🏆 Leaderboard des équipes", "Aucune équipe n'est configurée pour le moment.", INFO_COLOR)
+
+    embed = build_embed(
+        "🏆 Leaderboard des équipes",
+        "Classement général des teams du serveur.",
+        INFO_COLOR,
+    )
+
+    ranking_lines = []
+    for index, (_, data) in enumerate(sorted_teams, start=1):
+        role = get_team_role(guild, data)
+        if not role:
+            continue
+        ranking_lines.append(
+            f"{placement_emoji(index)} **#{index} • {data['emoji']} {role.mention}**\n"
+            f"└ `Points: {data['points']}` • `W/L: {data['wins']}/{data['losses']}` • `Winrate: {team_winrate(data):.1f}%` • `Membres: {len(role.members)}`"
+        )
+
+    embed.add_field(name="Classement", value="\n".join(ranking_lines), inline=False)
+    best_team_name, best_team_data = sorted_teams[0]
+    best_team_role = get_team_role(guild, best_team_data)
+    best_team_label = best_team_role.mention if best_team_role else best_team_name.title()
+    embed.add_field(
+        name="📌 Focus",
+        value=(
+            f"**Top team actuelle** : {best_team_data['emoji']} {best_team_label}\n"
+            f"**Bilan** : `{best_team_data['wins']} victoire(s)` / `{best_team_data['losses']} défaite(s)`"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Utilise /team @nomdelateam pour afficher le détail complet d'une équipe.")
+    return embed
+
+
 def team_overview_embed(guild: discord.Guild) -> discord.Embed:
     embed = build_embed("Équipes enregistrées", "Vue détaillée des équipes.", INFO_COLOR)
 
@@ -292,6 +352,34 @@ def team_overview_embed(guild: discord.Guild) -> discord.Embed:
     if not embed.fields:
         embed.description = "Aucune équipe n'est configurée pour le moment."
 
+    return embed
+
+
+def team_detail_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed:
+    team_entry = get_team_entry_by_role(role)
+    if team_entry is None:
+        return build_embed("Équipe introuvable", "Cette team n'est pas enregistrée.", ERROR_COLOR)
+
+    _team_name, data = team_entry
+    member_mentions = [member.mention for member in role.members[:MAX_TEAM_MEMBERS_DETAIL]]
+    members_value = ", ".join(member_mentions) if member_mentions else "Aucun membre"
+    remaining = len(role.members) - len(member_mentions)
+    if remaining > 0:
+        members_value += f"\n… et **{remaining}** autre(s) membre(s)."
+
+    embed = build_embed(
+        f"{data['emoji']} Détail de la team {role.name}",
+        "Fiche complète de l'équipe et de ses membres.",
+        INFO_COLOR,
+    )
+    embed.add_field(name="Points", value=f"`{data['points']}`", inline=True)
+    embed.add_field(name="Victoires", value=f"`{data['wins']}`", inline=True)
+    embed.add_field(name="Défaites", value=f"`{data['losses']}`", inline=True)
+    embed.add_field(name="Winrate", value=f"`{team_winrate(data):.1f}%`", inline=True)
+    embed.add_field(name="Nombre de membres", value=f"`{len(role.members)}`", inline=True)
+    embed.add_field(name="Rôle Discord", value=role.mention, inline=True)
+    embed.add_field(name="Membres", value=members_value, inline=False)
+    embed.set_footer(text="Commande disponible: /team @nomdelateam")
     return embed
 
 
@@ -518,9 +606,7 @@ async def leaderboard(ctx: discord_commands.Context) -> None:
         await send_ctx_embed(ctx, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR)
         return
 
-    lines = leaderboard_lines(ctx.guild)
-    description = "\n".join(lines) if lines else "Aucune équipe n'est configurée pour le moment."
-    await ctx.send(embed=build_embed("Classement des équipes", description, INFO_COLOR))
+    await ctx.send(embed=leaderboard_embed(ctx.guild))
 
 
 @discord_bot.command(help="Afficher le détail des équipes et de leurs membres")
@@ -530,6 +616,25 @@ async def teamsinfo(ctx: discord_commands.Context) -> None:
         return
 
     await ctx.send(embed=team_overview_embed(ctx.guild))
+
+
+@discord_bot.command(help="Afficher le détail d'une équipe via son rôle")
+async def team(ctx: discord_commands.Context, *, role_name: str) -> None:
+    if ctx.guild is None:
+        await send_ctx_embed(ctx, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR)
+        return
+
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if role is None:
+        await send_ctx_embed(
+            ctx,
+            "Équipe introuvable",
+            "Rôle introuvable. Utilise le nom exact de la team.",
+            ERROR_COLOR,
+        )
+        return
+
+    await ctx.send(embed=team_detail_embed(ctx.guild, role))
 
 
 # ===== DISCORD SLASH COMMANDS =====
@@ -732,9 +837,11 @@ async def slash_leaderboard(interaction: discord.Interaction) -> None:
         await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
         return
 
-    lines = leaderboard_lines(guild)
-    description = "\n".join(lines) if lines else "Aucune équipe n'est configurée pour le moment."
-    await send_interaction_embed(interaction, "Classement des équipes", description, INFO_COLOR)
+    embed = leaderboard_embed(guild)
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed)
+        return
+    await interaction.response.send_message(embed=embed)
 
 
 @discord_bot.tree.command(name="teams", description="Afficher les membres et les statistiques des équipes", guild=guild_object)
@@ -749,6 +856,22 @@ async def slash_teams(interaction: discord.Interaction) -> None:
         await interaction.followup.send(embed=embed)
         return
     await interaction.response.send_message(embed=embed)
+
+
+@discord_bot.tree.command(name="team", description="Voir le détail d'une team et ses membres", guild=guild_object)
+@app_commands.describe(role="Rôle de la team (ex: @NomDeLaTeam)")
+async def slash_team(interaction: discord.Interaction, role: discord.Role) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
+        return
+
+    embed = team_detail_embed(guild, role)
+    is_error_embed = embed.title == "Équipe introuvable"
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, ephemeral=is_error_embed)
+        return
+    await interaction.response.send_message(embed=embed, ephemeral=is_error_embed)
 
 
 @slash_addrule.error

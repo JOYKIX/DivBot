@@ -4,9 +4,6 @@ import os
 import random
 import string
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +29,6 @@ TWITCH_TOKEN = get_required_env("TWITCH_TOKEN")
 TWITCH_CHANNEL = get_required_env("TWITCH_CHANNEL")
 DISCORD_TOKEN = get_required_env("DISCORD_TOKEN")
 GUILD_ID = int(get_required_env("GUILD_ID"))
-TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "").strip()
-TWITCH_BROADCASTER_ID = os.getenv("TWITCH_BROADCASTER_ID", "").strip()
-TWITCH_BROADCASTER_TOKEN = os.getenv("TWITCH_BROADCASTER_TOKEN", "").strip()
 
 COOLDOWN = 10
 CODE_EXPIRATION = 120
@@ -826,39 +820,7 @@ class TwitchBot(twitch_commands.Bot):
         message_id = message.tags.get("id")
         if not message_id:
             return
-
-        deleted_via_api = await self.delete_twitch_message_via_streamer_account(message_id)
-        if deleted_via_api:
-            return
         await message.channel.send(f"/delete {message_id}")
-
-    async def delete_twitch_message_via_streamer_account(self, message_id: str) -> bool:
-        if not TWITCH_CLIENT_ID or not TWITCH_BROADCASTER_ID or not TWITCH_BROADCASTER_TOKEN:
-            return False
-
-        token = TWITCH_BROADCASTER_TOKEN.removeprefix("oauth:")
-        query = urllib.parse.urlencode(
-            {
-                "broadcaster_id": TWITCH_BROADCASTER_ID,
-                "moderator_id": TWITCH_BROADCASTER_ID,
-                "message_id": message_id,
-            }
-        )
-        request = urllib.request.Request(
-            url=f"https://api.twitch.tv/helix/moderation/chat?{query}",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Client-Id": TWITCH_CLIENT_ID,
-            },
-            method="DELETE",
-        )
-
-        try:
-            await asyncio.to_thread(urllib.request.urlopen, request, timeout=5)
-        except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError) as error:
-            print(f"[TWITCH] Suppression API impossible, fallback /delete: {error}")
-            return False
-        return True
 
     async def send_link_confirmation_dm(self, discord_id: int, twitch_username: str) -> None:
         user = discord_bot.get_user(discord_id)

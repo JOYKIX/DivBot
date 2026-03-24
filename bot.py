@@ -43,7 +43,7 @@ INFO_COLOR = discord.Color.gold()
 DATA_FILES: dict[str, Any] = {
     "links.json": {},
     "teams.json": {"teams": {}},
-    "config.json": {"rules": []},
+    "config.json": {"rules": [], "max_team_members": 0},
 }
 
 
@@ -82,7 +82,7 @@ ensure_data_files()
 # ===== DATA =====
 links = load_json("links.json", {})
 teams = load_json("teams.json", {"teams": {}})
-config = load_json("config.json", {"rules": []})
+config = load_json("config.json", {"rules": [], "max_team_members": 0})
 
 cooldowns: dict[str, float] = {}
 pending_codes: dict[str, dict[str, Any]] = {}
@@ -149,6 +149,26 @@ def save_links() -> None:
 def save_config() -> None:
     save_json("config.json", config)
 
+
+def normalize_config_data() -> None:
+    changed = False
+    if "rules" not in config or not isinstance(config["rules"], list):
+        config["rules"] = []
+        changed = True
+
+    if "max_team_members" not in config or not isinstance(config["max_team_members"], int):
+        config["max_team_members"] = 0
+        changed = True
+
+    if config["max_team_members"] < 0:
+        config["max_team_members"] = 0
+        changed = True
+
+    if changed:
+        save_config()
+
+
+normalize_config_data()
 
 
 def normalize_team_data() -> None:
@@ -243,13 +263,25 @@ def format_member_list(role: discord.Role) -> str:
     return ", ".join(member_names)
 
 
+def current_team_member_limit() -> int:
+    return int(config.get("max_team_members", 0))
+
+
+def team_member_limit_label() -> str:
+    limit = current_team_member_limit()
+    if limit <= 0:
+        return "Illimité"
+    return str(limit)
+
+
 def format_rules() -> str:
     if not config["rules"]:
-        return "Aucune règle configurée pour le moment."
+        return f"Aucune règle configurée pour le moment.\nLimite de membres par team : **{team_member_limit_label()}**."
 
     lines = []
     for index, rule in enumerate(config["rules"]):
         lines.append(f"`{index}` • **{rule['type']}** → `{rule['value']}` → **{rule['role']}**")
+    lines.append(f"\nLimite de membres par team : **{team_member_limit_label()}**.")
     return "\n".join(lines)
 
 
@@ -498,6 +530,11 @@ class DiscordBot(discord_commands.Bot):
 
         raise error
 
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        if before.roles == after.roles:
+            return
+        await enforce_team_limit_for_member(after)
+
 
 
 discord_bot = DiscordBot()
@@ -572,6 +609,45 @@ async def give_role(discord_id: int, role_name: str) -> bool:
         return True
 
     return False
+
+
+async def enforce_team_limit_for_member(member: discord.Member) -> None:
+    guild = member.guild
+    limit = current_team_member_limit()
+    if limit <= 0:
+        return
+
+    member_team_roles = []
+    for role in member.roles:
+        team_entry = get_team_entry_by_role(role)
+        if team_entry is not None:
+            member_team_roles.append((role, team_entry[1]))
+
+    if not member_team_roles:
+        return
+
+    for role, _team_data in member_team_roles:
+        if len(role.members) <= limit:
+            continue
+
+        try:
+            await member.remove_roles(role, reason=f"Limite de {limit} membre(s) pour les teams atteinte")
+        except discord.HTTPException:
+            continue
+
+        alert_channel = guild.system_channel
+        if alert_channel is None:
+            continue
+        await alert_channel.send(
+            embed=build_embed(
+                "Limite de team atteinte",
+                (
+                    f"{member.mention} n'a pas pu rejoindre **{role.name}** : "
+                    f"la limite est fixée à **{limit}** membre(s)."
+                ),
+                WARNING_COLOR,
+            )
+        )
 
 
 # ===== DISCORD PREFIX COMMANDS =====
@@ -788,6 +864,30 @@ async def slash_addpoints(interaction: discord.Interaction, role: discord.Role, 
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
 
+@discord_bot.tree.command(name="teamlimit", description="Définir la limite max de membres par team", guild=guild_object)
+@app_commands.describe(limit="0 = illimité, sinon nombre max de membres par team")
+@app_commands.check(is_discord_moderator)
+async def slash_teamlimit(interaction: discord.Interaction, limit: int) -> None:
+    if limit < 0:
+        await send_interaction_embed(
+            interaction,
+            "Valeur invalide",
+            "La limite doit être supérieure ou égale à 0.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    config["max_team_members"] = limit
+    save_config()
+    await send_interaction_embed(
+        interaction,
+        "Limite mise à jour",
+        f"Nouvelle limite de membres par team : **{team_member_limit_label()}**.",
+        SUCCESS_COLOR,
+    )
+
+
 @discord_bot.tree.command(name="leaderboard", description="Afficher le classement des équipes", guild=guild_object)
 async def slash_leaderboard(interaction: discord.Interaction) -> None:
     guild = interaction.guild
@@ -837,6 +937,7 @@ async def slash_team(interaction: discord.Interaction, role: discord.Role) -> No
 @slash_delrule.error
 @slash_createteam.error
 @slash_addpoints.error
+@slash_teamlimit.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
         await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)

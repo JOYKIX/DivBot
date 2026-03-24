@@ -10,9 +10,10 @@ Bot Discord + Twitch pour gérer :
 ### Côté Discord
 - réponses plus propres avec des **embeds** ;
 - **commandes slash** synchronisées sur le serveur (`GUILD_ID`) ;
-- conservation des commandes texte existantes principales (`!verify`, `!unlink`, `!rules`, `!leaderboard`, `!teamsinfo`) ;
+- conservation des commandes texte existantes principales (`!verify`, `!unlink`, `!rules`, `!leaderboard`, `!teamsinfo`, `!team`) ;
 - messages d'erreur et de confirmation plus lisibles.
 - vue détaillée des équipes avec les membres et le bilan victoires/défaites.
+- leaderboard amélioré (podium, winrate, focus de la meilleure équipe) + commande `/team @NomDeLaTeam`.
 
 ### Commandes slash disponibles
 - `/verify`
@@ -26,6 +27,7 @@ Bot Discord + Twitch pour gérer :
 - `/win`
 - `/leaderboard`
 - `/teams`
+- `/team`
 
 ### Commandes Twitch disponibles
 - `!link`

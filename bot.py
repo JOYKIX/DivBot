@@ -675,20 +675,6 @@ async def enforce_team_limit_for_member(member: discord.Member) -> None:
 
 
 # ===== DISCORD PREFIX COMMANDS =====
-@discord_bot.command(help="Associer ton compte Discord avec un code Twitch")
-async def verify(ctx: discord_commands.Context, code: str) -> None:
-    _ = code
-    await send_ctx_embed(
-        ctx,
-        "Commande remplacée",
-        (
-            "Le système a changé : utilise le bouton **Link Discord ↔ Twitch** sur Discord, "
-            "puis envoie le code dans le chat Twitch avec `!link CODE`."
-        ),
-        WARNING_COLOR,
-    )
-
-
 @discord_bot.command(help="Supprimer le lien entre Twitch et Discord")
 async def unlink(ctx: discord_commands.Context) -> None:
     removed_accounts = unlink_discord_user(ctx.author.id)

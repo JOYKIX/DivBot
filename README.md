@@ -65,6 +65,9 @@ TWITCH_TOKEN=oauth:remplace_par_ton_token_twitch
 TWITCH_CHANNEL=nom_de_ta_chaine
 DISCORD_TOKEN=remplace_par_ton_token_discord
 GUILD_ID=123456789012345678
+TWITCH_CLIENT_ID=client_id_twitch
+TWITCH_BROADCASTER_ID=id_numerique_de_la_chaine
+TWITCH_BROADCASTER_TOKEN=oauth:token_streamer_avec_scope_moderator_manage_chat_messages
 ```
 
 > Le projet contient déjà un `.env` d'exemple modifiable directement.
@@ -80,3 +83,4 @@ python bot.py
 - Les commandes slash sont synchronisées sur le serveur défini par `GUILD_ID`.
 - Pour `/addrule`, les types acceptés sont `contains` et `emote`.
 - La commande Twitch `!link` génère un code à valider ensuite sur Discord avec `/verify`.
+- Si `TWITCH_CLIENT_ID`, `TWITCH_BROADCASTER_ID` et `TWITCH_BROADCASTER_TOKEN` sont définis, `!link` supprime d'abord le message via l'API Twitch au nom du streamer, puis bascule sur `/delete` en secours.

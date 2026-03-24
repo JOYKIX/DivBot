@@ -166,6 +166,14 @@ def cleanup_expired_codes() -> None:
         del pending_codes[code]
 
 
+def remove_pending_codes_for_discord_user(discord_id: int) -> None:
+    codes_to_remove = [
+        code for code, data in pending_codes.items() if data.get("discord_id") == discord_id
+    ]
+    for code in codes_to_remove:
+        del pending_codes[code]
+
+
 
 def unlink_twitch_user(twitch_user: str) -> None:
     links.pop(twitch_user, None)
@@ -363,6 +371,7 @@ class DiscordBot(discord_commands.Bot):
 
     async def setup_hook(self) -> None:
         self.tree.copy_global_to(guild=guild_object)
+        self.add_view(LinkAccountView())
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -394,6 +403,41 @@ class DiscordBot(discord_commands.Bot):
 discord_bot = DiscordBot()
 
 
+class LinkAccountView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Link Discord ↔ Twitch",
+        style=discord.ButtonStyle.primary,
+        emoji="🔗",
+        custom_id="link_discord_twitch",
+    )
+    async def link_accounts_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        cleanup_expired_codes()
+        remove_pending_codes_for_discord_user(interaction.user.id)
+
+        code = generate_code()
+        pending_codes[code] = {
+            "discord_id": interaction.user.id,
+            "expires": time.time() + CODE_EXPIRATION,
+        }
+
+        await send_interaction_embed(
+            interaction,
+            "Code de liaison",
+            (
+                "Ton code privé est : "
+                f"`{code}`\n\n"
+                "Écris ce message dans le chat Twitch pour finaliser : "
+                f"`!link {code}`\n"
+                f"⏱️ Le code expire dans **{CODE_EXPIRATION} secondes**."
+            ),
+            INFO_COLOR,
+            ephemeral=True,
+        )
+
+
 # ===== ROLE UTILS =====
 async def give_role(discord_id: int, role_name: str) -> bool:
     guild = discord_bot.get_guild(GUILD_ID)
@@ -418,28 +462,15 @@ async def give_role(discord_id: int, role_name: str) -> bool:
 # ===== DISCORD PREFIX COMMANDS =====
 @discord_bot.command(help="Associer ton compte Discord avec un code Twitch")
 async def verify(ctx: discord_commands.Context, code: str) -> None:
-    cleanup_expired_codes()
-    code = code.upper()
-
-    if code not in pending_codes:
-        await send_ctx_embed(ctx, "Code invalide", "Le code fourni est invalide ou expiré.", ERROR_COLOR)
-        return
-
-    data = pending_codes[code]
-    twitch_user = data["user"]
-
-    unlink_twitch_user(twitch_user)
-    unlink_discord_user(ctx.author.id)
-    links[twitch_user] = ctx.author.id
-    save_links()
-
-    del pending_codes[code]
-
+    _ = code
     await send_ctx_embed(
         ctx,
-        "Compte lié",
-        f"Ton compte Discord est maintenant lié à **{twitch_user}**.",
-        SUCCESS_COLOR,
+        "Commande remplacée",
+        (
+            "Le système a changé : utilise le bouton **Link Discord ↔ Twitch** sur Discord, "
+            "puis envoie le code dans le chat Twitch avec `!link CODE`."
+        ),
+        WARNING_COLOR,
     )
 
 
@@ -485,27 +516,15 @@ async def teamsinfo(ctx: discord_commands.Context) -> None:
 @discord_bot.tree.command(name="verify", description="Associer ton compte Discord avec un code Twitch", guild=guild_object)
 @app_commands.describe(code="Code envoyé par le bot Twitch")
 async def slash_verify(interaction: discord.Interaction, code: str) -> None:
-    cleanup_expired_codes()
-    code = code.upper()
-
-    if code not in pending_codes:
-        await send_interaction_embed(interaction, "Code invalide", "Le code fourni est invalide ou expiré.", ERROR_COLOR, ephemeral=True)
-        return
-
-    data = pending_codes[code]
-    twitch_user = data["user"]
-
-    unlink_twitch_user(twitch_user)
-    unlink_discord_user(interaction.user.id)
-    links[twitch_user] = interaction.user.id
-    save_links()
-    del pending_codes[code]
-
+    _ = code
     await send_interaction_embed(
         interaction,
-        "Compte lié",
-        f"Ton compte Discord est maintenant lié à **{twitch_user}**.",
-        SUCCESS_COLOR,
+        "Commande remplacée",
+        (
+            "Le système a changé : utilise le bouton **Link Discord ↔ Twitch** sur Discord, "
+            "puis envoie le code dans le chat Twitch avec `!link CODE`."
+        ),
+        WARNING_COLOR,
         ephemeral=True,
     )
 
@@ -526,6 +545,30 @@ async def slash_unlink(interaction: discord.Interaction) -> None:
         SUCCESS_COLOR,
         ephemeral=True,
     )
+
+
+@discord_bot.tree.command(
+    name="linkpanel",
+    description="Publier l'embed avec bouton de liaison Discord ↔ Twitch",
+    guild=guild_object,
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_linkpanel(interaction: discord.Interaction) -> None:
+    if interaction.channel is None:
+        await send_interaction_embed(interaction, "Erreur", "Salon introuvable.", ERROR_COLOR, ephemeral=True)
+        return
+
+    embed = build_embed(
+        "Connexion Discord ↔ Twitch",
+        (
+            "Clique sur le bouton ci-dessous pour obtenir un **code privé**.\n"
+            "Ensuite, envoie ce code dans le chat Twitch avec `!link CODE`.\n\n"
+            "Exemple : `!link ABC123`"
+        ),
+        INFO_COLOR,
+    )
+    await interaction.channel.send(embed=embed, view=LinkAccountView())
+    await send_interaction_embed(interaction, "Panel envoyé", "Le message de liaison a été publié.", SUCCESS_COLOR, ephemeral=True)
 
 
 @discord_bot.tree.command(name="addrule", description="Ajouter une règle Twitch vers un rôle Discord", guild=guild_object)
@@ -683,6 +726,7 @@ async def slash_teams(interaction: discord.Interaction) -> None:
 
 
 @slash_addrule.error
+@slash_linkpanel.error
 @slash_delrule.error
 @slash_createteam.error
 @slash_addpoints.error
@@ -715,21 +759,25 @@ class TwitchBot(twitch_commands.Bot):
 
         if msg.lower().startswith("!link"):
             cleanup_expired_codes()
-            code = generate_code()
-            pending_codes[code] = {
-                "user": username,
-                "expires": time.time() + CODE_EXPIRATION,
-            }
-
-            if username == TWITCH_CHANNEL.lower():
-                await message.channel.send(f"{username}, code : {code} | utilise /verify {code} sur Discord")
+            parts = msg.split()
+            if len(parts) < 2:
+                await message.channel.send(f"{username}, utilise `!link CODE` avec le code reçu sur Discord.")
                 return
 
-            try:
-                await message.author.send(f"🔐 Code : {code} | utilise /verify {code} sur Discord")
-                await message.channel.send(f"{username}, regarde tes messages privés 👍")
-            except Exception:
-                await message.channel.send(f"{username}, impossible de t'envoyer un message privé")
+            code = parts[1].upper()
+            data = pending_codes.get(code)
+            if not data:
+                await message.channel.send(f"{username}, code invalide ou expiré.")
+                return
+
+            discord_id = data["discord_id"]
+            unlink_twitch_user(username)
+            unlink_discord_user(discord_id)
+            links[username] = discord_id
+            save_links()
+            del pending_codes[code]
+
+            await message.channel.send(f"{username}, ton compte Twitch est maintenant lié à ton Discord ✅")
             return
 
         await self.handle_commands(message)

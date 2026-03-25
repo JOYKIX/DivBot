@@ -45,6 +45,9 @@ class TwitchBot(twitch_commands.Bot):
         if message.echo:
             return
 
+        if message.author is None or not message.content:
+            return
+
         username = message.author.name.lower()
         msg = message.content
 
@@ -84,10 +87,19 @@ class TwitchBot(twitch_commands.Bot):
 
         discord_id = links[username]
         for rule in config["rules"]:
-            if rule["type"] == "contains" and rule["value"].lower() in msg.lower():
-                await give_role(discord_id, rule["role"])
-            elif rule["type"] == "emote" and message.tags.get("emotes") and rule["value"] in msg:
-                await give_role(discord_id, rule["role"])
+            if not isinstance(rule, dict):
+                continue
+
+            rule_type = rule.get("type")
+            rule_value = str(rule.get("value", ""))
+            rule_role = str(rule.get("role", "")).strip()
+            if not rule_value or not rule_role:
+                continue
+
+            if rule_type == "contains" and rule_value.lower() in msg.lower():
+                await give_role(discord_id, rule_role)
+            elif rule_type == "emote" and message.tags.get("emotes") and rule_value in msg:
+                await give_role(discord_id, rule_role)
 
     @twitch_commands.command(name="duel")
     async def duel_command(self, ctx: twitch_commands.Context, team_one: str, team_two: str, points: int) -> None:

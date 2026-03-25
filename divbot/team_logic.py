@@ -126,6 +126,13 @@ def leaderboard_embed(guild: discord.Guild) -> discord.Embed:
             f"└ `Points: {data['points']}` • `W/L: {data['wins']}/{data['losses']}` • `Winrate: {team_winrate(data):.1f}%` • `Membres: {len(role.members)}`"
         )
 
+    if not ranking_lines:
+        return build_embed(
+            "🏆 Leaderboard des équipes",
+            "Aucune équipe valide n'est disponible (rôles manquants ou supprimés).",
+            INFO_COLOR,
+        )
+
     embed.add_field(name="Classement", value="\n".join(ranking_lines), inline=False)
     best_team_name, best_team_data = sorted_teams[0]
     best_team_role = get_team_role(guild, best_team_data)

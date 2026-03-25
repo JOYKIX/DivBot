@@ -423,9 +423,9 @@ async def slash_delrule(interaction: discord.Interaction, index: int) -> None:
 
 
 @discord_bot.tree.command(name="createteam", description="Créer une équipe à partir d'un rôle Discord", guild=guild_object)
-@app_commands.describe(role="Rôle représentant l'équipe", emoji="Emoji affiché dans le classement")
+@app_commands.describe(role="Rôle représentant l'équipe", emoji="Emoji affiché comme blason", motto="Devise de l'équipe (optionnel)")
 @app_commands.check(is_discord_moderator)
-async def slash_createteam(interaction: discord.Interaction, role: discord.Role, emoji: str) -> None:
+async def slash_createteam(interaction: discord.Interaction, role: discord.Role, emoji: str, motto: str = "") -> None:
     name = role.name.lower()
     if name in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe existante", "Cette équipe existe déjà.", ERROR_COLOR, ephemeral=True)
@@ -439,9 +439,41 @@ async def slash_createteam(interaction: discord.Interaction, role: discord.Role,
         "losses": 0,
         "captain_id": None,
         "vice_captain_id": None,
+        "motto": motto.strip(),
     }
     save_teams()
     await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
+
+
+@discord_bot.tree.command(name="setteammotto", description="Définir la devise d'une équipe", guild=guild_object)
+@app_commands.describe(role="Rôle représentant l'équipe", motto="Nouvelle devise")
+@app_commands.check(is_discord_moderator)
+async def slash_setteammotto(interaction: discord.Interaction, role: discord.Role, motto: str) -> None:
+    name = role.name.lower()
+    if name not in teams["teams"]:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
+        return
+
+    cleaned_motto = motto.strip()
+    if len(cleaned_motto) > 120:
+        await send_interaction_embed(
+            interaction,
+            "Devise trop longue",
+            "La devise doit contenir au maximum 120 caractères.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    teams["teams"][name]["motto"] = cleaned_motto
+    save_teams()
+    motto_display = cleaned_motto if cleaned_motto else "Aucune devise"
+    await send_interaction_embed(
+        interaction,
+        "Devise mise à jour",
+        f"**{role.name}** → *{motto_display}*",
+        SUCCESS_COLOR,
+    )
 
 
 @discord_bot.tree.command(name="addpoints", description="Ajouter des points à une équipe", guild=guild_object)
@@ -593,6 +625,7 @@ async def slash_setvicecaptain(interaction: discord.Interaction, role: discord.R
 @slash_addpoints.error
 @slash_teamlimit.error
 @slash_setcaptain.error
+@slash_setteammotto.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
         await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)

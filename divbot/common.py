@@ -200,6 +200,12 @@ def normalize_team_data() -> None:
         if "vice_captain_id" not in team_data:
             team_data["vice_captain_id"] = None
             changed = True
+        if "motto" not in team_data:
+            team_data["motto"] = ""
+            changed = True
+        elif not isinstance(team_data["motto"], str):
+            team_data["motto"] = str(team_data["motto"])
+            changed = True
 
     for team_name in invalid_team_names:
         del teams["teams"][team_name]

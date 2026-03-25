@@ -34,6 +34,18 @@ def get_team_role(guild: discord.Guild, team_data: dict[str, Any]) -> discord.Ro
     return guild.get_role(team_data["role_id"])
 
 
+def team_staff_mentions(guild: discord.Guild, team_data: dict[str, Any]) -> str:
+    captain_id = team_data.get("captain_id")
+    vice_captain_id = team_data.get("vice_captain_id")
+
+    captain = guild.get_member(captain_id) if captain_id else None
+    vice_captain = guild.get_member(vice_captain_id) if vice_captain_id else None
+
+    captain_label = captain.mention if captain else "Non défini"
+    vice_label = vice_captain.mention if vice_captain else "Non défini"
+    return f"Capitaine : {captain_label}\nVice-capitaine : {vice_label}"
+
+
 def format_member_list(role: discord.Role) -> str:
     if not role.members:
         return "Aucun membre"
@@ -149,6 +161,7 @@ def team_overview_embed(guild: discord.Guild) -> discord.Embed:
             value=(
                 f"**Points** : `{data['points']}`\n"
                 f"**Bilan** : `{data['wins']} victoire(s)` / `{data['losses']} défaite(s)`\n"
+                f"**Staff** :\n{team_staff_mentions(guild, data)}\n"
                 f"**Membres** : {format_member_list(role)}"
             ),
             inline=False,
@@ -183,6 +196,7 @@ def team_detail_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed
     embed.add_field(name="Winrate", value=f"`{team_winrate(data):.1f}%`", inline=True)
     embed.add_field(name="Nombre de membres", value=f"`{len(role.members)}`", inline=True)
     embed.add_field(name="Rôle Discord", value=role.mention, inline=True)
+    embed.add_field(name="Staff", value=team_staff_mentions(guild, data), inline=False)
     embed.add_field(name="Membres", value=members_value, inline=False)
     embed.set_footer(text="Commande disponible: /team @nomdelateam")
     return embed

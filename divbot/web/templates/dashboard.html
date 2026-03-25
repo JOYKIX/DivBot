@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DivBot Panel</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>DivBot • Panel de configuration</h1>
+      <p>Configure les règles Twitch→Discord et les équipes sans passer par les commandes.</p>
+    </header>
+
+    <section class="card">
+      <h2>Limite de membres par team</h2>
+      <form method="post" action="{{ url_for('update_team_limit') }}" class="inline-form">
+        <input type="number" name="max_team_members" min="0" value="{{ max_team_members }}" required>
+        <button type="submit">Enregistrer</button>
+      </form>
+      <small>0 = illimité.</small>
+    </section>
+
+    <section class="card">
+      <h2>Ajouter une règle Twitch → rôle Discord</h2>
+      <form method="post" action="{{ url_for('add_rule') }}" class="grid-form">
+        <label>
+          Type
+          <select name="type">
+            {% for type in allowed_rule_types %}
+              <option value="{{ type }}">{{ type }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Valeur déclencheur
+          <input type="text" name="value" placeholder="gg / emote" required>
+        </label>
+        <label>
+          Rôle Discord
+          <input type="text" name="role" placeholder="Nom du rôle" required>
+        </label>
+        <button type="submit">Ajouter la règle</button>
+      </form>
+
+      <div class="stack">
+        {% if rules %}
+          {% for rule in rules %}
+            <article class="row">
+              <div>
+                <strong>{{ loop.index0 }}</strong> — <code>{{ rule.type }}</code> → <code>{{ rule.value }}</code> → <strong>{{ rule.role }}</strong>
+              </div>
+              <form method="post" action="{{ url_for('delete_rule', rule_index=loop.index0) }}">
+                <button type="submit" class="danger">Supprimer</button>
+              </form>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p>Aucune règle configurée.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Équipes</h2>
+      <div class="stack">
+        {% if teams %}
+          {% for name, team in teams %}
+            <article class="team-card">
+              <h3>{{ team.emoji }} {{ name|title }}</h3>
+              <p>Points : <strong>{{ team.points }}</strong> • W/L : {{ team.wins }}/{{ team.losses }}</p>
+              <form method="post" action="{{ url_for('add_points', team_name=name) }}" class="inline-form">
+                <input type="number" name="delta" value="1" required>
+                <button type="submit">Ajouter / retirer des points</button>
+              </form>
+              <form method="post" action="{{ url_for('update_motto', team_name=name) }}" class="inline-form">
+                <input type="text" name="motto" value="{{ team.motto }}" placeholder="Devise">
+                <button type="submit">Mettre à jour la devise</button>
+              </form>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p>Aucune équipe enregistrée.</p>
+        {% endif %}
+      </div>
+    </section>
+  </main>
+</body>
+</html>

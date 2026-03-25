@@ -15,6 +15,9 @@ Le code est maintenant séparé en modules simples :
 - `divbot/team_logic.py` : logique des équipes, leaderboard et duels.
 - `divbot/discord_app.py` : commandes Discord, vues UI et gestion des rôles.
 - `divbot/twitch_app.py` : commandes Twitch et liaison Twitch ↔ Discord.
+- `divbot/web_panel.py` : serveur web Flask pour le panel de configuration.
+- `divbot/web/templates/dashboard.html` : interface HTML du panel.
+- `divbot/web/static/panel.css` : style du panel.
 
 ## Fonctionnalités
 
@@ -53,7 +56,7 @@ Le code est maintenant séparé en modules simples :
 Python **3.11+** recommandé :
 
 ```bash
-pip install "discord.py>=2.4.0" "twitchio>=2.10.0" "python-dotenv>=1.0.1"
+pip install "discord.py>=2.4.0" "twitchio>=2.10.0" "python-dotenv>=1.0.1" "flask>=3.0.0"
 ```
 
 ## Fichiers JSON utilisés
@@ -80,4 +83,13 @@ GUILD_ID=123456789012345678
 
 ```bash
 python bot.py
+```
+
+Le panel web est lancé en même temps que les bots et disponible sur :
+- `http://localhost:8080` (par défaut)
+
+Variables optionnelles :
+```env
+WEB_HOST=0.0.0.0
+WEB_PORT=8080
 ```

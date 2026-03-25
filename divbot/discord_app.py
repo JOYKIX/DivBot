@@ -356,7 +356,8 @@ async def slash_linkpanel(interaction: discord.Interaction) -> None:
         (
             "Clique sur le bouton ci-dessous pour obtenir un **code privé**.\n"
             "Ensuite, envoie ce code dans le chat Twitch avec `!link CODE`.\n\n"
-            "Exemple : `!link ABC123`"
+            "Exemple : `!link ABC123`\n"
+            "🔴 Twitch : https://www.twitch.tv/joykix"
         ),
         INFO_COLOR,
     )
@@ -430,7 +431,15 @@ async def slash_createteam(interaction: discord.Interaction, role: discord.Role,
         await send_interaction_embed(interaction, "Équipe existante", "Cette équipe existe déjà.", ERROR_COLOR, ephemeral=True)
         return
 
-    teams["teams"][name] = {"role_id": role.id, "points": 0, "emoji": emoji, "wins": 0, "losses": 0}
+    teams["teams"][name] = {
+        "role_id": role.id,
+        "points": 0,
+        "emoji": emoji,
+        "wins": 0,
+        "losses": 0,
+        "captain_id": None,
+        "vice_captain_id": None,
+    }
     save_teams()
     await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
 
@@ -516,12 +525,74 @@ async def slash_team(interaction: discord.Interaction, role: discord.Role) -> No
     await interaction.response.send_message(embed=embed, ephemeral=is_error_embed)
 
 
+@discord_bot.tree.command(name="setcaptain", description="Définir le capitaine d'une team", guild=guild_object)
+@app_commands.describe(role="Rôle de la team", member="Membre à nommer capitaine")
+@app_commands.check(is_discord_moderator)
+async def slash_setcaptain(interaction: discord.Interaction, role: discord.Role, member: discord.Member) -> None:
+    team_entry = get_team_entry_by_role(role)
+    if team_entry is None:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'est pas enregistrée.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if role not in member.roles:
+        await send_interaction_embed(interaction, "Membre invalide", "Le capitaine doit être membre de cette team.", ERROR_COLOR, ephemeral=True)
+        return
+
+    _team_name, team_data = team_entry
+    team_data["captain_id"] = member.id
+    if team_data.get("vice_captain_id") == member.id:
+        team_data["vice_captain_id"] = None
+    save_teams()
+    await send_interaction_embed(interaction, "Capitaine défini", f"{member.mention} est maintenant capitaine de **{role.name}**.", SUCCESS_COLOR)
+
+
+@discord_bot.tree.command(name="setvicecaptain", description="Définir le vice-capitaine de ta team", guild=guild_object)
+@app_commands.describe(role="Rôle de la team", member="Membre à nommer vice-capitaine")
+async def slash_setvicecaptain(interaction: discord.Interaction, role: discord.Role, member: discord.Member) -> None:
+    team_entry = get_team_entry_by_role(role)
+    if team_entry is None:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'est pas enregistrée.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if not isinstance(interaction.user, discord.Member):
+        await send_interaction_embed(interaction, "Erreur", "Commande disponible uniquement sur le serveur.", ERROR_COLOR, ephemeral=True)
+        return
+
+    _team_name, team_data = team_entry
+    captain_id = team_data.get("captain_id")
+    if captain_id is None:
+        await send_interaction_embed(interaction, "Capitaine absent", "Aucun capitaine n'est défini pour cette team.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if interaction.user.id != captain_id:
+        await send_interaction_embed(interaction, "Permission refusée", "Seul le capitaine de cette team peut nommer un vice-capitaine.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if role not in member.roles:
+        await send_interaction_embed(interaction, "Membre invalide", "Le vice-capitaine doit être membre de cette team.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if member.id == captain_id:
+        await send_interaction_embed(interaction, "Membre invalide", "Le capitaine ne peut pas être son propre vice-capitaine.", ERROR_COLOR, ephemeral=True)
+        return
+
+    team_data["vice_captain_id"] = member.id
+    save_teams()
+    await send_interaction_embed(
+        interaction,
+        "Vice-capitaine défini",
+        f"{member.mention} est maintenant vice-capitaine de **{role.name}**.",
+        SUCCESS_COLOR,
+    )
+
+
 @slash_addrule.error
 @slash_linkpanel.error
 @slash_delrule.error
 @slash_createteam.error
 @slash_addpoints.error
 @slash_teamlimit.error
+@slash_setcaptain.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
         await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)

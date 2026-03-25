@@ -24,6 +24,7 @@ Le code est maintenant séparé en modules simples :
 - commandes texte principales (`!unlink`, `!rules`, `!leaderboard`, `!teamsinfo`, `!team`) ;
 - vue détaillée des équipes avec membres + bilan victoires/défaites ;
 - leaderboard avec podium, winrate et focus de la meilleure équipe ;
+- gestion des rôles d'encadrement d'équipe (capitaine / vice-capitaine) ;
 - panneau de liaison via bouton **Link Discord ↔ Twitch**.
 
 ### Commandes slash disponibles
@@ -39,6 +40,8 @@ Le code est maintenant séparé en modules simples :
 - `/leaderboard`
 - `/teams`
 - `/team`
+- `/setcaptain`
+- `/setvicecaptain`
 
 ### Commandes Twitch disponibles
 - `!link <CODE>`

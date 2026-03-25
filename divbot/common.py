@@ -128,6 +128,12 @@ def normalize_team_data() -> None:
         if "losses" not in team_data:
             team_data["losses"] = 0
             changed = True
+        if "captain_id" not in team_data:
+            team_data["captain_id"] = None
+            changed = True
+        if "vice_captain_id" not in team_data:
+            team_data["vice_captain_id"] = None
+            changed = True
 
     if changed:
         save_teams()

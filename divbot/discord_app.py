@@ -361,7 +361,7 @@ async def slash_linkpanel(interaction: discord.Interaction) -> None:
             "Clique sur le bouton ci-dessous pour obtenir un **code privé**.\n"
             "Ensuite, envoie ce code dans le chat Twitch avec `!link CODE`.\n\n"
             "Exemple : `!link ABC123`\n"
-            "🔴 Twitch : https://www.twitch.tv/joykix"
+            "🟣 Twitch : https://www.twitch.tv/joykix"
         ),
         INFO_COLOR,
     )

@@ -1,0 +1,172 @@
+import json
+import os
+import random
+import string
+import time
+from pathlib import Path
+from typing import Any
+
+import discord
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def get_required_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        raise RuntimeError(f"Variable d'environnement manquante : {name}")
+    return value.strip()
+
+
+TWITCH_TOKEN = get_required_env("TWITCH_TOKEN")
+TWITCH_CHANNEL = get_required_env("TWITCH_CHANNEL")
+DISCORD_TOKEN = get_required_env("DISCORD_TOKEN")
+GUILD_ID = int(get_required_env("GUILD_ID"))
+
+COOLDOWN = 10
+CODE_EXPIRATION = 120
+MAX_TEAM_MEMBERS_DISPLAY = 10
+MAX_TEAM_MEMBERS_DETAIL = 25
+ALLOWED_RULE_TYPES = {"contains", "emote"}
+DEFAULT_COLOR = discord.Color.blurple()
+SUCCESS_COLOR = discord.Color.green()
+ERROR_COLOR = discord.Color.red()
+WARNING_COLOR = discord.Color.orange()
+INFO_COLOR = discord.Color.gold()
+DATA_FILES: dict[str, Any] = {
+    "links.json": {},
+    "teams.json": {"teams": {}},
+    "config.json": {"rules": [], "max_team_members": 0},
+}
+
+
+def data_path(filename: str) -> Path:
+    return BASE_DIR / filename
+
+
+def load_json(filename: str, default: Any) -> Any:
+    path = data_path(filename)
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
+
+
+def save_json(filename: str, data: Any) -> None:
+    path = data_path(filename)
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4, ensure_ascii=False)
+
+
+def ensure_data_files() -> None:
+    for filename, default_value in DATA_FILES.items():
+        path = data_path(filename)
+        if not path.exists():
+            save_json(filename, default_value)
+
+
+ensure_data_files()
+
+links = load_json("links.json", {})
+teams = load_json("teams.json", {"teams": {}})
+config = load_json("config.json", {"rules": [], "max_team_members": 0})
+
+cooldowns: dict[str, float] = {}
+pending_codes: dict[str, dict[str, Any]] = {}
+active_duel: dict[str, Any] | None = None
+
+
+def generate_code() -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+def save_teams() -> None:
+    save_json("teams.json", teams)
+
+
+def save_links() -> None:
+    save_json("links.json", links)
+
+
+def save_config() -> None:
+    save_json("config.json", config)
+
+
+def normalize_config_data() -> None:
+    changed = False
+    if "rules" not in config or not isinstance(config["rules"], list):
+        config["rules"] = []
+        changed = True
+
+    if "max_team_members" not in config or not isinstance(config["max_team_members"], int):
+        config["max_team_members"] = 0
+        changed = True
+
+    if config["max_team_members"] < 0:
+        config["max_team_members"] = 0
+        changed = True
+
+    if changed:
+        save_config()
+
+
+def normalize_team_data() -> None:
+    changed = False
+    for team_data in teams["teams"].values():
+        if "points" not in team_data:
+            team_data["points"] = 0
+            changed = True
+        if "emoji" not in team_data:
+            team_data["emoji"] = "🏷️"
+            changed = True
+        if "wins" not in team_data:
+            team_data["wins"] = 0
+            changed = True
+        if "losses" not in team_data:
+            team_data["losses"] = 0
+            changed = True
+
+    if changed:
+        save_teams()
+
+
+def cleanup_expired_codes() -> None:
+    now = time.time()
+    expired_codes = [
+        code for code, data in pending_codes.items() if now > data["expires"]
+    ]
+
+    for code in expired_codes:
+        del pending_codes[code]
+
+
+def remove_pending_codes_for_discord_user(discord_id: int) -> None:
+    codes_to_remove = [
+        code for code, data in pending_codes.items() if data.get("discord_id") == discord_id
+    ]
+    for code in codes_to_remove:
+        del pending_codes[code]
+
+
+def unlink_twitch_user(twitch_user: str) -> None:
+    links.pop(twitch_user, None)
+
+
+def unlink_discord_user(discord_id: int) -> list[str]:
+    linked_accounts = [
+        twitch_user
+        for twitch_user, linked_discord_id in links.items()
+        if linked_discord_id == discord_id
+    ]
+
+    for twitch_user in linked_accounts:
+        del links[twitch_user]
+
+    return linked_accounts
+
+
+normalize_config_data()
+normalize_team_data()

@@ -96,10 +96,41 @@ def save_config() -> None:
 
 
 def normalize_config_data() -> None:
+    global config
     changed = False
+    if not isinstance(config, dict):
+        config = {}
+        changed = True
+
     if "rules" not in config or not isinstance(config["rules"], list):
         config["rules"] = []
         changed = True
+    else:
+        normalized_rules = []
+        for rule in config["rules"]:
+            if not isinstance(rule, dict):
+                changed = True
+                continue
+
+            trigger_type = str(rule.get("type", "")).strip().lower()
+            value = str(rule.get("value", "")).strip()
+            role = str(rule.get("role", "")).strip()
+            if trigger_type not in ALLOWED_RULE_TYPES or not value or not role:
+                changed = True
+                continue
+
+            normalized_rules.append(
+                {
+                    "type": trigger_type,
+                    "value": value,
+                    "action": "give_role",
+                    "role": role,
+                }
+            )
+
+        if normalized_rules != config["rules"]:
+            config["rules"] = normalized_rules
+            changed = True
 
     if "max_team_members" not in config or not isinstance(config["max_team_members"], int):
         config["max_team_members"] = 0
@@ -114,10 +145,39 @@ def normalize_config_data() -> None:
 
 
 def normalize_team_data() -> None:
+    global teams
     changed = False
-    for team_data in teams["teams"].values():
+    if not isinstance(teams, dict):
+        teams = {"teams": {}}
+        changed = True
+
+    if "teams" not in teams or not isinstance(teams["teams"], dict):
+        teams["teams"] = {}
+        changed = True
+
+    invalid_team_names = []
+
+    def normalize_int(value: Any, fallback: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    for team_name, team_data in teams["teams"].items():
+        if not isinstance(team_data, dict):
+            invalid_team_names.append(team_name)
+            changed = True
+            continue
+
+        if "role_id" not in team_data or not isinstance(team_data["role_id"], int):
+            team_data["role_id"] = 0
+            changed = True
+
         if "points" not in team_data:
             team_data["points"] = 0
+            changed = True
+        elif not isinstance(team_data["points"], int):
+            team_data["points"] = normalize_int(team_data["points"], 0)
             changed = True
         if "emoji" not in team_data:
             team_data["emoji"] = "🏷️"
@@ -125,8 +185,14 @@ def normalize_team_data() -> None:
         if "wins" not in team_data:
             team_data["wins"] = 0
             changed = True
+        elif not isinstance(team_data["wins"], int):
+            team_data["wins"] = normalize_int(team_data["wins"], 0)
+            changed = True
         if "losses" not in team_data:
             team_data["losses"] = 0
+            changed = True
+        elif not isinstance(team_data["losses"], int):
+            team_data["losses"] = normalize_int(team_data["losses"], 0)
             changed = True
         if "captain_id" not in team_data:
             team_data["captain_id"] = None
@@ -134,6 +200,9 @@ def normalize_team_data() -> None:
         if "vice_captain_id" not in team_data:
             team_data["vice_captain_id"] = None
             changed = True
+
+    for team_name in invalid_team_names:
+        del teams["teams"][team_name]
 
     if changed:
         save_teams()

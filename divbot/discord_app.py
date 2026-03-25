@@ -52,10 +52,14 @@ async def send_interaction_embed(
     view: discord.ui.View | None = None,
 ) -> None:
     embed = build_embed(title, description, color)
+    send_kwargs: dict[str, object] = {"embed": embed, "ephemeral": ephemeral}
+    if view is not None:
+        send_kwargs["view"] = view
+
     if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, ephemeral=ephemeral, view=view)
+        await interaction.followup.send(**send_kwargs)
         return
-    await interaction.response.send_message(embed=embed, ephemeral=ephemeral, view=view)
+    await interaction.response.send_message(**send_kwargs)
 
 
 def is_discord_moderator(interaction: discord.Interaction) -> bool:

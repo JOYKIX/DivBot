@@ -449,6 +449,83 @@ async def slash_createteam(interaction: discord.Interaction, role: discord.Role,
     await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
 
 
+@discord_bot.tree.command(name="deleteteam", description="Supprimer une équipe", guild=guild_object)
+@app_commands.describe(role="Rôle représentant l'équipe à supprimer")
+@app_commands.check(is_discord_moderator)
+async def slash_deleteteam(interaction: discord.Interaction, role: discord.Role) -> None:
+    name = role.name.lower()
+    if name not in teams["teams"]:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
+        return
+
+    del teams["teams"][name]
+    save_teams()
+    await send_interaction_embed(interaction, "Équipe supprimée", f"L'équipe **{role.name}** a été supprimée.", SUCCESS_COLOR)
+
+
+@discord_bot.tree.command(name="editteam", description="Modifier une équipe", guild=guild_object)
+@app_commands.describe(
+    role="Rôle représentant l'équipe",
+    emoji="Nouvel emoji (optionnel)",
+    motto="Nouvelle devise (optionnel)",
+)
+@app_commands.check(is_discord_moderator)
+async def slash_editteam(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    emoji: str | None = None,
+    motto: str | None = None,
+) -> None:
+    name = role.name.lower()
+    if name not in teams["teams"]:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if emoji is None and motto is None:
+        await send_interaction_embed(
+            interaction,
+            "Aucune modification",
+            "Tu dois fournir au moins un champ à modifier (emoji et/ou devise).",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    team_data = teams["teams"][name]
+    updates: list[str] = []
+
+    if emoji is not None:
+        cleaned_emoji = emoji.strip()
+        if not cleaned_emoji:
+            await send_interaction_embed(interaction, "Emoji invalide", "L'emoji ne peut pas être vide.", ERROR_COLOR, ephemeral=True)
+            return
+        team_data["emoji"] = cleaned_emoji
+        updates.append(f"Emoji → {cleaned_emoji}")
+
+    if motto is not None:
+        cleaned_motto = motto.strip()
+        if len(cleaned_motto) > 120:
+            await send_interaction_embed(
+                interaction,
+                "Devise trop longue",
+                "La devise doit contenir au maximum 120 caractères.",
+                ERROR_COLOR,
+                ephemeral=True,
+            )
+            return
+        team_data["motto"] = cleaned_motto
+        motto_display = cleaned_motto if cleaned_motto else "Aucune devise"
+        updates.append(f"Devise → *{motto_display}*")
+
+    save_teams()
+    await send_interaction_embed(
+        interaction,
+        "Équipe modifiée",
+        f"**{role.name}**\n" + "\n".join(f"• {update}" for update in updates),
+        SUCCESS_COLOR,
+    )
+
+
 @discord_bot.tree.command(name="setteammotto", description="Définir la devise d'une équipe", guild=guild_object)
 @app_commands.describe(role="Rôle représentant l'équipe", motto="Nouvelle devise")
 @app_commands.check(is_discord_moderator)
@@ -626,6 +703,8 @@ async def slash_setvicecaptain(interaction: discord.Interaction, role: discord.R
 @slash_linkpanel.error
 @slash_delrule.error
 @slash_createteam.error
+@slash_deleteteam.error
+@slash_editteam.error
 @slash_addpoints.error
 @slash_teamlimit.error
 @slash_setcaptain.error

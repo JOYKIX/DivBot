@@ -96,6 +96,11 @@ def team_winrate(team_data: dict[str, Any]) -> float:
     return (team_data["wins"] / total_matches) * 100
 
 
+def team_motto(team_data: dict[str, Any]) -> str:
+    motto = str(team_data.get("motto", "")).strip()
+    return motto if motto else "Aucune devise définie."
+
+
 def build_embed(title: str, description: str, color: discord.Color) -> discord.Embed:
     return discord.Embed(title=title, description=description, color=color)
 
@@ -150,7 +155,7 @@ def leaderboard_embed(guild: discord.Guild) -> discord.Embed:
 
 
 def team_overview_embed(guild: discord.Guild) -> discord.Embed:
-    embed = build_embed("Équipes enregistrées", "Vue détaillée des équipes.", INFO_COLOR)
+    embed = build_embed("📖 Fiches d'équipes", "Nouvelles cartes d'identité des équipes.", INFO_COLOR)
 
     sorted_teams = sorted(
         teams["teams"].items(),
@@ -164,12 +169,14 @@ def team_overview_embed(guild: discord.Guild) -> discord.Embed:
             continue
 
         embed.add_field(
-            name=f"{data['emoji']} {role.name}",
+            name=f"{data['emoji']}  {role.name}",
             value=(
-                f"**Points** : `{data['points']}`\n"
-                f"**Bilan** : `{data['wins']} victoire(s)` / `{data['losses']} défaite(s)`\n"
+                f"**BLASON**\n{data['emoji']} {data['emoji']} {data['emoji']}\n"
+                f"**Devise** : *{team_motto(data)}*\n"
+                f"**Points** : `{data['points']}` • **Winrate** : `{team_winrate(data):.1f}%`\n"
+                f"**Bilan** : `{data['wins']}V / {data['losses']}D` • **Membres** : `{len(role.members)}`\n"
                 f"**Staff** :\n{team_staff_mentions(guild, data)}\n"
-                f"**Membres** : {format_member_list(role)}"
+                f"**Roster** : {format_member_list(role)}"
             ),
             inline=False,
         )
@@ -193,19 +200,20 @@ def team_detail_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed
         members_value += f"\n… et **{remaining}** autre(s) membre(s)."
 
     embed = build_embed(
-        f"{data['emoji']} Détail de la team {role.name}",
-        "Fiche complète de l'équipe et de ses membres.",
+        f"🛡️ Fiche d'équipe • {role.name}",
+        f"# {data['emoji']}\n*{team_motto(data)}*",
         INFO_COLOR,
     )
+    embed.add_field(name="Blason", value=data["emoji"], inline=True)
+    embed.add_field(name="Rôle Discord", value=role.mention, inline=True)
+    embed.add_field(name="Effectif", value=f"`{len(role.members)}`", inline=True)
     embed.add_field(name="Points", value=f"`{data['points']}`", inline=True)
     embed.add_field(name="Victoires", value=f"`{data['wins']}`", inline=True)
     embed.add_field(name="Défaites", value=f"`{data['losses']}`", inline=True)
     embed.add_field(name="Winrate", value=f"`{team_winrate(data):.1f}%`", inline=True)
-    embed.add_field(name="Nombre de membres", value=f"`{len(role.members)}`", inline=True)
-    embed.add_field(name="Rôle Discord", value=role.mention, inline=True)
     embed.add_field(name="Staff", value=team_staff_mentions(guild, data), inline=False)
     embed.add_field(name="Membres", value=members_value, inline=False)
-    embed.set_footer(text="Commande disponible: /team @nomdelateam")
+    embed.set_footer(text="Commandes utiles : /team • /setteammotto")
     return embed
 
 

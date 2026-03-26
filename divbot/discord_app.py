@@ -28,7 +28,6 @@ from divbot.common import (
 from divbot.team_logic import (
     build_embed,
     current_team_member_limit,
-    format_rules,
     get_team_entry_by_role,
     leaderboard_embed,
     set_team_limit,
@@ -236,7 +235,26 @@ async def handle_linkpanel_request(interaction: discord.Interaction) -> None:
     await send_interaction_embed(interaction, "Panel envoyé", "Le message de liaison a été publié.", SUCCESS_COLOR, ephemeral=True)
 
 
-async def handle_addrule_request(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
+def build_rules_embed() -> discord.Embed:
+    embed = build_embed(
+        "📜 Règles Twitch → Discord",
+        "Gère tes règles avec `/rule add` et `/rule remove`.",
+        INFO_COLOR,
+    )
+    if not config["rules"]:
+        embed.add_field(name="Aucune règle", value="Utilise `/rule add` pour créer la première règle.", inline=False)
+        return embed
+
+    for index, rule in enumerate(config["rules"]):
+        embed.add_field(
+            name=f"#{index} • {rule['type']}",
+            value=f"Déclencheur : `{rule['value']}`\nRôle attribué : **{rule['role']}**",
+            inline=False,
+        )
+    return embed
+
+
+async def handle_addrule_request(interaction: discord.Interaction, trigger_type: str, value: str, role: discord.Role) -> None:
     trigger_type = trigger_type.lower()
     if trigger_type not in ALLOWED_RULE_TYPES:
         await send_interaction_embed(
@@ -248,22 +266,42 @@ async def handle_addrule_request(interaction: discord.Interaction, trigger_type:
         )
         return
 
-    config["rules"].append(
-        {
-            "type": trigger_type,
-            "value": value,
-            "action": "give_role",
-            "role": role_name,
-        }
+    cleaned_value = value.strip()
+    if not cleaned_value:
+        await send_interaction_embed(interaction, "Valeur invalide", "Le mot-clé ou l'emote ne peut pas être vide.", ERROR_COLOR, ephemeral=True)
+        return
+
+    role_name = role.name
+    duplicate_rule = next(
+        (
+            rule
+            for rule in config["rules"]
+            if rule["type"] == trigger_type and rule["value"].lower() == cleaned_value.lower() and rule["role"] == role_name
+        ),
+        None,
     )
+    if duplicate_rule is not None:
+        await send_interaction_embed(
+            interaction,
+            "Règle déjà existante",
+            "Cette règle existe déjà, aucune modification appliquée.",
+            WARNING_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    config["rules"].append({"type": trigger_type, "value": cleaned_value, "action": "give_role", "role": role_name})
     save_config()
 
-    await send_interaction_embed(
-        interaction,
-        "Règle ajoutée",
-        f"Nouvelle règle : **{trigger_type}** → `{value}` → **{role_name}**.",
-        SUCCESS_COLOR,
-    )
+    embed = build_embed("✅ Règle ajoutée", "La règle a bien été enregistrée.", SUCCESS_COLOR)
+    embed.add_field(name="Type", value=f"`{trigger_type}`", inline=True)
+    embed.add_field(name="Déclencheur", value=f"`{cleaned_value}`", inline=True)
+    embed.add_field(name="Rôle", value=role.mention, inline=True)
+    embed.set_footer(text=f"Total de règles : {len(config['rules'])}")
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def handle_delrule_request(interaction: discord.Interaction, index: int) -> None:
@@ -274,12 +312,15 @@ async def handle_delrule_request(interaction: discord.Interaction, index: int) -
         return
 
     save_config()
-    await send_interaction_embed(
-        interaction,
-        "Règle supprimée",
-        f"Suppression de **{removed['type']}** → `{removed['value']}` → **{removed['role']}**.",
-        SUCCESS_COLOR,
-    )
+    embed = build_embed("🗑️ Règle supprimée", "La règle a été retirée de la configuration.", SUCCESS_COLOR)
+    embed.add_field(name="Type", value=f"`{removed['type']}`", inline=True)
+    embed.add_field(name="Déclencheur", value=f"`{removed['value']}`", inline=True)
+    embed.add_field(name="Rôle", value=f"**{removed['role']}**", inline=True)
+    embed.set_footer(text=f"Règles restantes : {len(config['rules'])}")
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def give_role(discord_id: int, role_name: str) -> bool:
@@ -356,7 +397,7 @@ async def unlink(ctx: discord_commands.Context) -> None:
 
 @discord_bot.command(help="Afficher toutes les règles Twitch → Discord")
 async def rules(ctx: discord_commands.Context) -> None:
-    await ctx.send(embed=build_embed("Règles configurées", format_rules(), INFO_COLOR))
+    await ctx.send(embed=build_rules_embed())
 
 
 @discord_bot.command(help="Afficher le classement des équipes")
@@ -410,18 +451,6 @@ async def slash_linkpanel(interaction: discord.Interaction) -> None:
     await handle_linkpanel_request(interaction)
 
 
-@discord_bot.tree.command(name="addrule", description="Ajouter une règle Twitch vers un rôle Discord", guild=guild_object)
-@app_commands.describe(trigger_type="contains ou emote", value="Mot-clé ou emote", role_name="Nom exact du rôle à donner")
-@app_commands.check(is_discord_moderator)
-async def slash_addrule(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
-    await handle_addrule_request(interaction, trigger_type, value, role_name)
-
-
-@discord_bot.tree.command(name="rules", description="Afficher les règles configurées", guild=guild_object)
-async def slash_rules(interaction: discord.Interaction) -> None:
-    await send_interaction_embed(interaction, "Règles configurées", format_rules(), INFO_COLOR, ephemeral=True)
-
-
 @link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")
 async def link_remove(interaction: discord.Interaction) -> None:
     await handle_unlink_request(interaction)
@@ -435,27 +464,42 @@ async def link_panel(interaction: discord.Interaction) -> None:
 
 @rule_group.command(name="list", description="Afficher les règles configurées")
 async def rule_list(interaction: discord.Interaction) -> None:
-    await send_interaction_embed(interaction, "Règles configurées", format_rules(), INFO_COLOR, ephemeral=True)
+    embed = build_rules_embed()
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @rule_group.command(name="add", description="Ajouter une règle Twitch vers un rôle Discord")
-@app_commands.describe(trigger_type="contains ou emote", value="Mot-clé ou emote", role_name="Nom exact du rôle à donner")
+@app_commands.describe(trigger_type="contains ou emote", value="Mot-clé ou emote", role="Rôle Discord à attribuer")
 @app_commands.check(is_discord_moderator)
-async def rule_add(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
-    await handle_addrule_request(interaction, trigger_type, value, role_name)
+async def rule_add(interaction: discord.Interaction, trigger_type: str, value: str, role: discord.Role) -> None:
+    await handle_addrule_request(interaction, trigger_type, value, role)
+
+
+async def rule_remove_index_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[int]]:
+    del interaction
+    search = current.lower().strip()
+    choices: list[app_commands.Choice[int]] = []
+    for index, rule in enumerate(config["rules"]):
+        label = f"#{index} • {rule['type']}:{rule['value']} -> {rule['role']}"
+        if search and search not in label.lower():
+            continue
+        choices.append(app_commands.Choice(name=label[:100], value=index))
+        if len(choices) >= 25:
+            break
+    return choices
 
 
 @rule_group.command(name="remove", description="Supprimer une règle par son index")
 @app_commands.describe(index="Index visible dans /rule list")
+@app_commands.autocomplete(index=rule_remove_index_autocomplete)
 @app_commands.check(is_discord_moderator)
 async def rule_remove(interaction: discord.Interaction, index: int) -> None:
-    await handle_delrule_request(interaction, index)
-
-
-@discord_bot.tree.command(name="delrule", description="Supprimer une règle par son index", guild=guild_object)
-@app_commands.describe(index="Index visible dans /rules")
-@app_commands.check(is_discord_moderator)
-async def slash_delrule(interaction: discord.Interaction, index: int) -> None:
     await handle_delrule_request(interaction, index)
 
 
@@ -732,9 +776,7 @@ async def slash_setvicecaptain(interaction: discord.Interaction, role: discord.R
     )
 
 
-@slash_addrule.error
 @slash_linkpanel.error
-@slash_delrule.error
 @slash_createteam.error
 @slash_deleteteam.error
 @slash_editteam.error

@@ -82,6 +82,8 @@ def is_discord_moderator(interaction: discord.Interaction) -> bool:
 
 intents = discord.Intents.all()
 guild_object = discord.Object(id=GUILD_ID)
+link_group = app_commands.Group(name="link", description="Commandes de liaison Twitch ↔ Discord")
+rule_group = app_commands.Group(name="rule", description="Commandes de gestion des règles Twitch")
 
 
 class DiscordBot(discord_commands.Bot):
@@ -91,6 +93,8 @@ class DiscordBot(discord_commands.Bot):
 
     async def setup_hook(self) -> None:
         self.tree.copy_global_to(guild=guild_object)
+        self.tree.add_command(link_group, guild=guild_object)
+        self.tree.add_command(rule_group, guild=guild_object)
         self.add_view(LinkAccountView())
 
     async def on_ready(self) -> None:
@@ -194,6 +198,88 @@ class LinkCodeView(discord.ui.View):
 
 
 discord_bot = DiscordBot()
+
+
+async def handle_unlink_request(interaction: discord.Interaction) -> None:
+    removed_accounts = unlink_discord_user(interaction.user.id)
+
+    if not removed_accounts:
+        await send_interaction_embed(interaction, "Aucune liaison", "Aucun compte Twitch n'est lié à ton compte Discord.", WARNING_COLOR, ephemeral=True)
+        return
+
+    save_links()
+    await send_interaction_embed(
+        interaction,
+        "Liaison supprimée",
+        f"Compte(s) déliés : **{', '.join(removed_accounts)}**.",
+        SUCCESS_COLOR,
+        ephemeral=True,
+    )
+
+
+async def handle_linkpanel_request(interaction: discord.Interaction) -> None:
+    if interaction.channel is None:
+        await send_interaction_embed(interaction, "Erreur", "Salon introuvable.", ERROR_COLOR, ephemeral=True)
+        return
+
+    embed = build_embed(
+        "Connexion Discord ↔ Twitch",
+        (
+            "Clique sur le bouton ci-dessous pour obtenir un **code privé**.\n"
+            "Ensuite, envoie ce code dans le chat Twitch avec `!link CODE`.\n\n"
+            "Exemple : `!link ABC123`\n"
+            "🟣 Twitch : https://www.twitch.tv/joykix"
+        ),
+        INFO_COLOR,
+    )
+    await interaction.channel.send(embed=embed, view=LinkAccountView())
+    await send_interaction_embed(interaction, "Panel envoyé", "Le message de liaison a été publié.", SUCCESS_COLOR, ephemeral=True)
+
+
+async def handle_addrule_request(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
+    trigger_type = trigger_type.lower()
+    if trigger_type not in ALLOWED_RULE_TYPES:
+        await send_interaction_embed(
+            interaction,
+            "Type invalide",
+            f"Types autorisés : **{', '.join(sorted(ALLOWED_RULE_TYPES))}**.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    config["rules"].append(
+        {
+            "type": trigger_type,
+            "value": value,
+            "action": "give_role",
+            "role": role_name,
+        }
+    )
+    save_config()
+
+    await send_interaction_embed(
+        interaction,
+        "Règle ajoutée",
+        f"Nouvelle règle : **{trigger_type}** → `{value}` → **{role_name}**.",
+        SUCCESS_COLOR,
+    )
+
+
+async def handle_delrule_request(interaction: discord.Interaction, index: int) -> None:
+    try:
+        removed = config["rules"].pop(index)
+    except IndexError:
+        await send_interaction_embed(interaction, "Index invalide", "Aucune règle ne correspond à cet index.", ERROR_COLOR, ephemeral=True)
+        return
+
+    save_config()
+    await send_interaction_embed(
+        interaction,
+        "Règle supprimée",
+        f"Suppression de **{removed['type']}** → `{removed['value']}` → **{removed['role']}**.",
+        SUCCESS_COLOR,
+    )
 
 
 async def give_role(discord_id: int, role_name: str) -> bool:
@@ -307,82 +393,28 @@ async def team(ctx: discord_commands.Context, *, role_name: str) -> None:
         )
         return
 
-    await ctx.send(embed=team_detail_embed(ctx.guild, role)
+    await ctx.send(embed=team_detail_embed(ctx.guild, role))
 
 @discord_bot.tree.command(name="unlink", description="Supprimer la liaison avec ton compte Twitch", guild=guild_object)
 async def slash_unlink(interaction: discord.Interaction) -> None:
-    removed_accounts = unlink_discord_user(interaction.user.id)
-
-    if not removed_accounts:
-        await send_interaction_embed(interaction, "Aucune liaison", "Aucun compte Twitch n'est lié à ton compte Discord.", WARNING_COLOR, ephemeral=True)
-        return
-
-    save_links()
-    await send_interaction_embed(
-        interaction,
-        "Liaison supprimée",
-        f"Compte(s) déliés : **{', '.join(removed_accounts)}**.",
-        SUCCESS_COLOR,
-        ephemeral=True,
-    )
+    await handle_unlink_request(interaction)
 
 
 @discord_bot.tree.command(
     name="linkpanel",
-    description="Publier l'embed avec bouton de liaison Discord ↔ Twitch",
+    description="(Legacy) Publier l'embed avec bouton de liaison Discord ↔ Twitch",
     guild=guild_object,
 )
 @app_commands.check(is_discord_moderator)
 async def slash_linkpanel(interaction: discord.Interaction) -> None:
-    if interaction.channel is None:
-        await send_interaction_embed(interaction, "Erreur", "Salon introuvable.", ERROR_COLOR, ephemeral=True)
-        return
-
-    embed = build_embed(
-        "Connexion Discord ↔ Twitch",
-        (
-            "Clique sur le bouton ci-dessous pour obtenir un **code privé**.\n"
-            "Ensuite, envoie ce code dans le chat Twitch avec `!link CODE`.\n\n"
-            "Exemple : `!link ABC123`\n"
-            "🟣 Twitch : https://www.twitch.tv/joykix"
-        ),
-        INFO_COLOR,
-    )
-    await interaction.channel.send(embed=embed, view=LinkAccountView())
-    await send_interaction_embed(interaction, "Panel envoyé", "Le message de liaison a été publié.", SUCCESS_COLOR, ephemeral=True)
+    await handle_linkpanel_request(interaction)
 
 
 @discord_bot.tree.command(name="addrule", description="Ajouter une règle Twitch vers un rôle Discord", guild=guild_object)
 @app_commands.describe(trigger_type="contains ou emote", value="Mot-clé ou emote", role_name="Nom exact du rôle à donner")
 @app_commands.check(is_discord_moderator)
 async def slash_addrule(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
-    trigger_type = trigger_type.lower()
-    if trigger_type not in ALLOWED_RULE_TYPES:
-        await send_interaction_embed(
-            interaction,
-            "Type invalide",
-            f"Types autorisés : **{', '.join(sorted(ALLOWED_RULE_TYPES))}**.",
-            ERROR_COLOR,
-            ephemeral=True,
-        )
-        return
-
-    config["rules"].append(
-        {
-            "type": trigger_type,
-            "value": value,
-            "action": "give_role",
-            "role": role_name,
-        }
-    )
-    save_config()
-
-    await send_interaction_embed(
-        interaction,
-        "Règle ajoutée",
-        f"Nouvelle règle : **{trigger_type}** → `{value}` → **{role_name}**.",
-        SUCCESS_COLOR,
-    )
+    await handle_addrule_request(interaction, trigger_type, value, role_name)
 
 
 @discord_bot.tree.command(name="rules", description="Afficher les règles configurées", guild=guild_object)
@@ -390,23 +422,41 @@ async def slash_rules(interaction: discord.Interaction) -> None:
     await send_interaction_embed(interaction, "Règles configurées", format_rules(), INFO_COLOR, ephemeral=True)
 
 
+@link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")
+async def link_remove(interaction: discord.Interaction) -> None:
+    await handle_unlink_request(interaction)
+
+
+@link_group.command(name="panel", description="Publier l'embed avec bouton de liaison Discord ↔ Twitch")
+@app_commands.check(is_discord_moderator)
+async def link_panel(interaction: discord.Interaction) -> None:
+    await handle_linkpanel_request(interaction)
+
+
+@rule_group.command(name="list", description="Afficher les règles configurées")
+async def rule_list(interaction: discord.Interaction) -> None:
+    await send_interaction_embed(interaction, "Règles configurées", format_rules(), INFO_COLOR, ephemeral=True)
+
+
+@rule_group.command(name="add", description="Ajouter une règle Twitch vers un rôle Discord")
+@app_commands.describe(trigger_type="contains ou emote", value="Mot-clé ou emote", role_name="Nom exact du rôle à donner")
+@app_commands.check(is_discord_moderator)
+async def rule_add(interaction: discord.Interaction, trigger_type: str, value: str, role_name: str) -> None:
+    await handle_addrule_request(interaction, trigger_type, value, role_name)
+
+
+@rule_group.command(name="remove", description="Supprimer une règle par son index")
+@app_commands.describe(index="Index visible dans /rule list")
+@app_commands.check(is_discord_moderator)
+async def rule_remove(interaction: discord.Interaction, index: int) -> None:
+    await handle_delrule_request(interaction, index)
+
+
 @discord_bot.tree.command(name="delrule", description="Supprimer une règle par son index", guild=guild_object)
 @app_commands.describe(index="Index visible dans /rules")
 @app_commands.check(is_discord_moderator)
 async def slash_delrule(interaction: discord.Interaction, index: int) -> None:
-    try:
-        removed = config["rules"].pop(index)
-    except IndexError:
-        await send_interaction_embed(interaction, "Index invalide", "Aucune règle ne correspond à cet index.", ERROR_COLOR, ephemeral=True)
-        return
-
-    save_config()
-    await send_interaction_embed(
-        interaction,
-        "Règle supprimée",
-        f"Suppression de **{removed['type']}** → `{removed['value']}` → **{removed['role']}**.",
-        SUCCESS_COLOR,
-    )
+    await handle_delrule_request(interaction, index)
 
 
 @discord_bot.tree.command(name="createteam", description="Créer une équipe à partir d'un rôle Discord", guild=guild_object)
@@ -692,6 +742,9 @@ async def slash_setvicecaptain(interaction: discord.Interaction, role: discord.R
 @slash_teamlimit.error
 @slash_setcaptain.error
 @slash_setteammotto.error
+@link_panel.error
+@rule_add.error
+@rule_remove.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
         await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)

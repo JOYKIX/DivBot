@@ -37,9 +37,6 @@ from divbot.team_logic import (
 )
 
 
-async def send_ctx_embed(ctx: discord_commands.Context, title: str, description: str, color: discord.Color) -> None:
-    await ctx.send(embed=build_embed(title, description, color))
-
 
 async def send_interaction_embed(
     interaction: discord.Interaction,
@@ -83,6 +80,7 @@ intents = discord.Intents.all()
 guild_object = discord.Object(id=GUILD_ID)
 link_group = app_commands.Group(name="link", description="Commandes de liaison Twitch ↔ Discord")
 rule_group = app_commands.Group(name="rule", description="Commandes de gestion des règles Twitch")
+team_group = app_commands.Group(name="team", description="Commandes de gestion des équipes")
 
 
 class DiscordBot(discord_commands.Bot):
@@ -94,6 +92,7 @@ class DiscordBot(discord_commands.Bot):
         self.tree.copy_global_to(guild=guild_object)
         self.tree.add_command(link_group, guild=guild_object)
         self.tree.add_command(rule_group, guild=guild_object)
+        self.tree.add_command(team_group, guild=guild_object)
         self.add_view(LinkAccountView())
 
     async def on_ready(self) -> None:
@@ -102,24 +101,6 @@ class DiscordBot(discord_commands.Bot):
             print(f"[DISCORD] {len(synced_commands)} commandes slash synchronisées sur {GUILD_ID}")
             self.synced = True
         print(f"[DISCORD] Connecté : {self.user}")
-
-    async def on_command_error(self, ctx: discord_commands.Context, error: Exception) -> None:
-        if isinstance(error, discord_commands.MissingPermissions):
-            await send_ctx_embed(ctx, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR)
-            return
-
-        if isinstance(error, discord_commands.MissingRequiredArgument):
-            await send_ctx_embed(ctx, "Argument manquant", "Il manque un argument pour cette commande.", ERROR_COLOR)
-            return
-
-        if isinstance(error, discord_commands.BadArgument):
-            await send_ctx_embed(ctx, "Argument invalide", "Un des arguments fournis est invalide.", ERROR_COLOR)
-            return
-
-        if isinstance(error, discord_commands.CommandNotFound):
-            return
-
-        raise error
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         if before.roles == after.roles:
@@ -382,75 +363,6 @@ async def enforce_team_limit_for_member(member: discord.Member) -> None:
         )
 
 
-@discord_bot.command(help="Supprimer le lien entre Twitch et Discord")
-async def unlink(ctx: discord_commands.Context) -> None:
-    removed_accounts = unlink_discord_user(ctx.author.id)
-
-    if not removed_accounts:
-        await send_ctx_embed(ctx, "Aucune liaison", "Aucun compte Twitch n'est lié à ton compte Discord.", WARNING_COLOR)
-        return
-
-    save_links()
-    removed_list = ", ".join(removed_accounts)
-    await send_ctx_embed(ctx, "Liaison supprimée", f"Compte(s) déliés : **{removed_list}**.", SUCCESS_COLOR)
-
-
-@discord_bot.command(help="Afficher toutes les règles Twitch → Discord")
-async def rules(ctx: discord_commands.Context) -> None:
-    await ctx.send(embed=build_rules_embed())
-
-
-@discord_bot.command(help="Afficher le classement des équipes")
-async def leaderboard(ctx: discord_commands.Context) -> None:
-    if ctx.guild is None:
-        await send_ctx_embed(ctx, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR)
-        return
-
-    await ctx.send(embed=leaderboard_embed(ctx.guild))
-
-
-@discord_bot.command(help="Afficher le détail des équipes et de leurs membres")
-async def teamsinfo(ctx: discord_commands.Context) -> None:
-    if ctx.guild is None:
-        await send_ctx_embed(ctx, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR)
-        return
-
-    await ctx.send(embed=team_overview_embed(ctx.guild))
-
-
-@discord_bot.command(help="Afficher le détail d'une équipe via son rôle")
-async def team(ctx: discord_commands.Context, *, role_name: str) -> None:
-    if ctx.guild is None:
-        await send_ctx_embed(ctx, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR)
-        return
-
-    role = discord.utils.get(ctx.guild.roles, name=role_name)
-    if role is None:
-        await send_ctx_embed(
-            ctx,
-            "Équipe introuvable",
-            "Rôle introuvable. Utilise le nom exact de la team.",
-            ERROR_COLOR,
-        )
-        return
-
-    await ctx.send(embed=team_detail_embed(ctx.guild, role))
-
-@discord_bot.tree.command(name="unlink", description="Supprimer la liaison avec ton compte Twitch", guild=guild_object)
-async def slash_unlink(interaction: discord.Interaction) -> None:
-    await handle_unlink_request(interaction)
-
-
-@discord_bot.tree.command(
-    name="linkpanel",
-    description="(Legacy) Publier l'embed avec bouton de liaison Discord ↔ Twitch",
-    guild=guild_object,
-)
-@app_commands.check(is_discord_moderator)
-async def slash_linkpanel(interaction: discord.Interaction) -> None:
-    await handle_linkpanel_request(interaction)
-
-
 @link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")
 async def link_remove(interaction: discord.Interaction) -> None:
     await handle_unlink_request(interaction)
@@ -503,10 +415,10 @@ async def rule_remove(interaction: discord.Interaction, index: int) -> None:
     await handle_delrule_request(interaction, index)
 
 
-@discord_bot.tree.command(name="createteam", description="Créer une équipe à partir d'un rôle Discord", guild=guild_object)
+@team_group.command(name="create", description="Créer une équipe à partir d'un rôle Discord")
 @app_commands.describe(role="Rôle représentant l'équipe", emoji="Emoji affiché comme blason", motto="Devise de l'équipe (optionnel)")
 @app_commands.check(is_discord_moderator)
-async def slash_createteam(interaction: discord.Interaction, role: discord.Role, emoji: str, motto: str = "") -> None:
+async def team_create(interaction: discord.Interaction, role: discord.Role, emoji: str, motto: str = "") -> None:
     name = role.name.lower()
     if name in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe existante", "Cette équipe existe déjà.", ERROR_COLOR, ephemeral=True)
@@ -526,10 +438,10 @@ async def slash_createteam(interaction: discord.Interaction, role: discord.Role,
     await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
 
 
-@discord_bot.tree.command(name="deleteteam", description="Supprimer une équipe", guild=guild_object)
+@team_group.command(name="delete", description="Supprimer une équipe")
 @app_commands.describe(role="Rôle représentant l'équipe à supprimer")
 @app_commands.check(is_discord_moderator)
-async def slash_deleteteam(interaction: discord.Interaction, role: discord.Role) -> None:
+async def team_delete(interaction: discord.Interaction, role: discord.Role) -> None:
     name = role.name.lower()
     if name not in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
@@ -540,14 +452,14 @@ async def slash_deleteteam(interaction: discord.Interaction, role: discord.Role)
     await send_interaction_embed(interaction, "Équipe supprimée", f"L'équipe **{role.name}** a été supprimée.", SUCCESS_COLOR)
 
 
-@discord_bot.tree.command(name="editteam", description="Modifier une équipe", guild=guild_object)
+@team_group.command(name="edit", description="Modifier une équipe")
 @app_commands.describe(
     role="Rôle représentant l'équipe",
     emoji="Nouvel emoji (optionnel)",
     motto="Nouvelle devise (optionnel)",
 )
 @app_commands.check(is_discord_moderator)
-async def slash_editteam(
+async def team_edit(
     interaction: discord.Interaction,
     role: discord.Role,
     emoji: str | None = None,
@@ -603,10 +515,10 @@ async def slash_editteam(
     )
 
 
-@discord_bot.tree.command(name="setteammotto", description="Définir la devise d'une équipe", guild=guild_object)
+@team_group.command(name="motto", description="Définir la devise d'une équipe")
 @app_commands.describe(role="Rôle représentant l'équipe", motto="Nouvelle devise")
 @app_commands.check(is_discord_moderator)
-async def slash_setteammotto(interaction: discord.Interaction, role: discord.Role, motto: str) -> None:
+async def team_motto(interaction: discord.Interaction, role: discord.Role, motto: str) -> None:
     name = role.name.lower()
     if name not in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
@@ -634,10 +546,10 @@ async def slash_setteammotto(interaction: discord.Interaction, role: discord.Rol
     )
 
 
-@discord_bot.tree.command(name="addpoints", description="Ajouter des points à une équipe", guild=guild_object)
+@team_group.command(name="points", description="Ajouter des points à une équipe")
 @app_commands.describe(role="Rôle de l'équipe", amount="Nombre de points à ajouter")
 @app_commands.check(is_discord_moderator)
-async def slash_addpoints(interaction: discord.Interaction, role: discord.Role, amount: int) -> None:
+async def team_points(interaction: discord.Interaction, role: discord.Role, amount: int) -> None:
     name = role.name.lower()
     if name not in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
@@ -648,10 +560,10 @@ async def slash_addpoints(interaction: discord.Interaction, role: discord.Role, 
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
 
-@discord_bot.tree.command(name="teamlimit", description="Définir la limite max de membres par team", guild=guild_object)
+@team_group.command(name="limit", description="Définir la limite max de membres par team")
 @app_commands.describe(limit="0 = illimité, sinon nombre max de membres par team")
 @app_commands.check(is_discord_moderator)
-async def slash_teamlimit(interaction: discord.Interaction, limit: int) -> None:
+async def team_limit(interaction: discord.Interaction, limit: int) -> None:
     if limit < 0:
         await send_interaction_embed(
             interaction,
@@ -671,8 +583,8 @@ async def slash_teamlimit(interaction: discord.Interaction, limit: int) -> None:
     )
 
 
-@discord_bot.tree.command(name="leaderboard", description="Afficher le classement des équipes", guild=guild_object)
-async def slash_leaderboard(interaction: discord.Interaction) -> None:
+@team_group.command(name="leaderboard", description="Afficher le classement des équipes")
+async def team_leaderboard(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
@@ -685,8 +597,8 @@ async def slash_leaderboard(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=embed)
 
 
-@discord_bot.tree.command(name="teams", description="Afficher les membres et les statistiques des équipes", guild=guild_object)
-async def slash_teams(interaction: discord.Interaction) -> None:
+@team_group.command(name="list", description="Afficher les membres et les statistiques des équipes")
+async def team_list(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
@@ -699,9 +611,9 @@ async def slash_teams(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=embed)
 
 
-@discord_bot.tree.command(name="team", description="Voir le détail d'une team et ses membres", guild=guild_object)
+@team_group.command(name="detail", description="Voir le détail d'une team et ses membres")
 @app_commands.describe(role="Rôle de la team (ex: @NomDeLaTeam)")
-async def slash_team(interaction: discord.Interaction, role: discord.Role) -> None:
+async def team_detail(interaction: discord.Interaction, role: discord.Role) -> None:
     guild = interaction.guild
     if guild is None:
         await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
@@ -715,10 +627,10 @@ async def slash_team(interaction: discord.Interaction, role: discord.Role) -> No
     await interaction.response.send_message(embed=embed, ephemeral=is_error_embed)
 
 
-@discord_bot.tree.command(name="setcaptain", description="Définir le capitaine d'une team", guild=guild_object)
+@team_group.command(name="captain", description="Définir le capitaine d'une team")
 @app_commands.describe(role="Rôle de la team", member="Membre à nommer capitaine")
 @app_commands.check(is_discord_moderator)
-async def slash_setcaptain(interaction: discord.Interaction, role: discord.Role, member: discord.Member) -> None:
+async def team_captain(interaction: discord.Interaction, role: discord.Role, member: discord.Member) -> None:
     team_entry = get_team_entry_by_role(role)
     if team_entry is None:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'est pas enregistrée.", ERROR_COLOR, ephemeral=True)
@@ -736,9 +648,9 @@ async def slash_setcaptain(interaction: discord.Interaction, role: discord.Role,
     await send_interaction_embed(interaction, "Capitaine défini", f"{member.mention} est maintenant capitaine de **{role.name}**.", SUCCESS_COLOR)
 
 
-@discord_bot.tree.command(name="setvicecaptain", description="Définir le vice-capitaine de ta team", guild=guild_object)
+@team_group.command(name="vicecaptain", description="Définir le vice-capitaine de ta team")
 @app_commands.describe(role="Rôle de la team", member="Membre à nommer vice-capitaine")
-async def slash_setvicecaptain(interaction: discord.Interaction, role: discord.Role, member: discord.Member) -> None:
+async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role, member: discord.Member) -> None:
     team_entry = get_team_entry_by_role(role)
     if team_entry is None:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'est pas enregistrée.", ERROR_COLOR, ephemeral=True)
@@ -776,14 +688,13 @@ async def slash_setvicecaptain(interaction: discord.Interaction, role: discord.R
     )
 
 
-@slash_linkpanel.error
-@slash_createteam.error
-@slash_deleteteam.error
-@slash_editteam.error
-@slash_addpoints.error
-@slash_teamlimit.error
-@slash_setcaptain.error
-@slash_setteammotto.error
+@team_create.error
+@team_delete.error
+@team_edit.error
+@team_points.error
+@team_limit.error
+@team_captain.error
+@team_motto.error
 @link_panel.error
 @rule_add.error
 @rule_remove.error

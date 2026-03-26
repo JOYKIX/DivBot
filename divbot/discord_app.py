@@ -307,24 +307,7 @@ async def team(ctx: discord_commands.Context, *, role_name: str) -> None:
         )
         return
 
-    await ctx.send(embed=team_detail_embed(ctx.guild, role))
-
-
-@discord_bot.tree.command(name="verify", description="Associer ton compte Discord avec un code Twitch", guild=guild_object)
-@app_commands.describe(code="Code envoyé par le bot Twitch")
-async def slash_verify(interaction: discord.Interaction, code: str) -> None:
-    _ = code
-    await send_interaction_embed(
-        interaction,
-        "Commande remplacée",
-        (
-            "Le système a changé : utilise le bouton **Link Discord ↔ Twitch** sur Discord, "
-            "puis envoie le code dans le chat Twitch avec `!link CODE`."
-        ),
-        WARNING_COLOR,
-        ephemeral=True,
-    )
-
+    await ctx.send(embed=team_detail_embed(ctx.guild, role)
 
 @discord_bot.tree.command(name="unlink", description="Supprimer la liaison avec ton compte Twitch", guild=guild_object)
 async def slash_unlink(interaction: discord.Interaction) -> None:

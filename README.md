@@ -21,7 +21,6 @@ Le code est maintenant séparé en modules simples :
 ### Côté Discord
 - réponses propres avec des **embeds** ;
 - **commandes slash** synchronisées sur le serveur (`GUILD_ID`) ;
-- commandes texte principales (`!unlink`, `!rules`, `!leaderboard`, `!teamsinfo`, `!team`) ;
 - vue détaillée des équipes avec membres + bilan victoires/défaites ;
 - leaderboard avec podium, winrate et focus de la meilleure équipe ;
 - gestion des rôles d'encadrement d'équipe (capitaine / vice-capitaine) ;
@@ -37,25 +36,18 @@ Le code est maintenant séparé en modules simples :
 - `/rule add`
 - `/rule remove`
 
-#### Legacy (toujours disponibles)
-- `/unlink`
-- `/linkpanel`
-- `/addrule`
-- `/rules`
-- `/delrule`
-
 #### Teams
-- `/createteam`
-- `/deleteteam`
-- `/editteam`
-- `/setteammotto`
-- `/addpoints`
-- `/teamlimit`
-- `/leaderboard`
-- `/teams`
-- `/team`
-- `/setcaptain`
-- `/setvicecaptain`
+- `/team list`
+- `/team detail`
+- `/team leaderboard`
+- `/team create`
+- `/team delete`
+- `/team edit`
+- `/team motto`
+- `/team points`
+- `/team limit`
+- `/team captain`
+- `/team vicecaptain`
 
 ### Commandes Twitch disponibles
 - `!link <CODE>`

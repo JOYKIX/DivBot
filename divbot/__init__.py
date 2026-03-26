@@ -1,1 +1,1 @@
-"""DivBot package."""
+"""ZogBot package."""

@@ -1,11 +1,11 @@
-# DivBot
+# ZogBot
 
-Bot Discord + Twitch pour gérer :
+Bot Discord + Twitch (anciennement DivBot) pour gérer :
 - la liaison entre un compte Twitch et un compte Discord ;
 - l'attribution automatique de rôles Discord selon les messages Twitch ;
 - les équipes, les points et le classement via Discord.
 
-## Structure du projet (version organisée)
+## Structure du projet
 
 Le code est maintenant séparé en modules simples :
 
@@ -28,13 +28,27 @@ Le code est maintenant séparé en modules simples :
 - panneau de liaison via bouton **Link Discord ↔ Twitch**.
 
 ### Commandes slash disponibles
-- `/verify`
+#### Liaison
+- `/link remove`
+- `/link panel`
+
+#### Règles
+- `/rule list`
+- `/rule add`
+- `/rule remove`
+
+#### Legacy (toujours disponibles)
 - `/unlink`
 - `/linkpanel`
 - `/addrule`
 - `/rules`
 - `/delrule`
+
+#### Teams
 - `/createteam`
+- `/deleteteam`
+- `/editteam`
+- `/setteammotto`
 - `/addpoints`
 - `/teamlimit`
 - `/leaderboard`

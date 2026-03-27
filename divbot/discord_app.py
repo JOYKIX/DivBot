@@ -212,6 +212,10 @@ class LinkCodeView(discord.ui.View):
 
 discord_bot = DiscordBot()
 leaderboard_messages: dict[int, discord.Message] = {}
+TEAM_SWITCH_ALERT_CHANNEL_ID = 1487218240647205054
+DELINQUENT_ROLE_ID = 1487122699275862099
+TEAM_SWITCH_SPAM_THRESHOLD = 3
+team_switch_violations: dict[int, int] = {}
 
 
 async def refresh_registered_leaderboards() -> None:
@@ -449,28 +453,64 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
     kept_role = kept_team_roles[0] if kept_team_roles else None
     removed_names = ", ".join(f"**{role.name}**" for role in removed_roles)
     kept_name = f"**{kept_role.name}**" if kept_role is not None else "aucune"
+    violations = team_switch_violations.get(after.id, 0) + 1
+    team_switch_violations[after.id] = violations
+
+    warning_messages = {
+        1: f"⚠️ Avertissement 1/{TEAM_SWITCH_SPAM_THRESHOLD} : tu es déjà dans {kept_name}. Retrait de {removed_names}.",
+        2: (
+            f"🚨 Avertissement 2/{TEAM_SWITCH_SPAM_THRESHOLD} : arrêt immédiat du spam de changement d'équipe. "
+            f"Retrait de {removed_names}."
+        ),
+    }
+    user_warning_message = warning_messages.get(
+        violations,
+        (
+            f"⛔ Avertissement {TEAM_SWITCH_SPAM_THRESHOLD}/{TEAM_SWITCH_SPAM_THRESHOLD} : spam détecté. "
+            "Tu es retiré de ta team actuelle et placé sous surveillance."
+        ),
+    )
 
     try:
         await after.send(
             embed=build_embed(
                 "Une seule team autorisée",
-                f"Tu es déjà dans {kept_name}. Retrait de {removed_names}.",
+                user_warning_message,
                 WARNING_COLOR,
             )
         )
     except discord.HTTPException:
         pass
 
-    alert_channel = guild.system_channel
-    if alert_channel is None:
-        return
-    await alert_channel.send(
-        embed=build_embed(
-            "Team multiple bloquée",
-            f"{after.mention} ne peut pas être dans plusieurs teams. Retrait de {removed_names}.",
-            WARNING_COLOR,
+    if violations >= TEAM_SWITCH_SPAM_THRESHOLD:
+        delinquent_role = guild.get_role(DELINQUENT_ROLE_ID)
+        try:
+            if kept_role is not None:
+                await after.remove_roles(kept_role, reason="Spam de changement de team (3 avertissements)")
+            if delinquent_role is not None and delinquent_role not in after.roles:
+                await after.add_roles(delinquent_role, reason="Spam de changement de team (3 avertissements)")
+        except discord.HTTPException:
+            pass
+        finally:
+            team_switch_violations[after.id] = 0
+
+    alert_channel = guild.get_channel(TEAM_SWITCH_ALERT_CHANNEL_ID)
+    if isinstance(alert_channel, discord.TextChannel):
+        await alert_channel.send(
+            embed=build_embed(
+                "Team multiple bloquée",
+                (
+                    f"{after.mention} a tenté un changement de team. "
+                    f"Avertissement **{min(violations, TEAM_SWITCH_SPAM_THRESHOLD)}/{TEAM_SWITCH_SPAM_THRESHOLD}**."
+                    + (
+                        " Sanction appliquée : retrait de sa team + rôle **Délinquant**."
+                        if violations >= TEAM_SWITCH_SPAM_THRESHOLD
+                        else f" Retrait de {removed_names}."
+                    )
+                ),
+                WARNING_COLOR,
+            )
         )
-    )
 
 
 def team_role_ids_for_member(member: discord.Member) -> set[int]:

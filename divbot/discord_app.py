@@ -230,6 +230,15 @@ TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
 team_switch_violations: dict[int, int] = {}
 team_spam_restore_tasks: dict[int, asyncio.Task[None]] = {}
+team_enforcement_locks: dict[int, asyncio.Lock] = {}
+
+
+def get_team_enforcement_lock(member_id: int) -> asyncio.Lock:
+    lock = team_enforcement_locks.get(member_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        team_enforcement_locks[member_id] = lock
+    return lock
 
 
 async def restore_member_after_team_spam(guild_id: int, member_id: int, team_role_id: int | None) -> None:
@@ -512,120 +521,126 @@ async def enforce_delinquent_team_block(before: discord.Member, after: discord.M
 
 
 async def enforce_single_team_membership(before: discord.Member, after: discord.Member) -> None:
-    guild = after.guild
-    before_team_roles = [role for role in before.roles if get_team_entry_by_role(role) is not None]
-    after_team_roles = [role for role in after.roles if get_team_entry_by_role(role) is not None]
-    if len(after_team_roles) <= 1:
-        return
+    lock = get_team_enforcement_lock(after.id)
+    async with lock:
+        guild = after.guild
+        current_member = guild.get_member(after.id)
+        if current_member is None:
+            return
 
-    protected_role_ids = {role.id for role in before_team_roles}
-    removed_roles = []
-    for role in after_team_roles:
-        if role.id in protected_role_ids:
-            continue
-        removed_roles.append(role)
+        before_team_roles = [role for role in before.roles if get_team_entry_by_role(role) is not None]
+        after_team_roles = [role for role in current_member.roles if get_team_entry_by_role(role) is not None]
+        if len(after_team_roles) <= 1:
+            return
 
-    if not removed_roles:
-        kept_role = max(after_team_roles, key=lambda role: role.position)
-        removed_roles = [role for role in after_team_roles if role.id != kept_role.id]
+        protected_role_ids = {role.id for role in before_team_roles}
+        removed_roles = []
+        for role in after_team_roles:
+            if role.id in protected_role_ids:
+                continue
+            removed_roles.append(role)
 
-    if not removed_roles:
-        return
+        if not removed_roles:
+            kept_role = max(after_team_roles, key=lambda role: role.position)
+            removed_roles = [role for role in after_team_roles if role.id != kept_role.id]
 
-    try:
-        await after.remove_roles(*removed_roles, reason="Un membre ne peut appartenir qu'à une seule team")
-    except discord.HTTPException:
-        return
+        if not removed_roles:
+            return
 
-    kept_team_roles = [role for role in after_team_roles if role.id not in {removed.id for removed in removed_roles}]
-    kept_role = kept_team_roles[0] if kept_team_roles else None
-    removed_names = ", ".join(f"**{role.name}**" for role in removed_roles)
-    kept_name = f"**{kept_role.name}**" if kept_role is not None else "aucune"
-    violations = team_switch_violations.get(after.id, 0) + 1
-    team_switch_violations[after.id] = violations
-
-    warning_messages = {
-        1: f"⚠️ Avertissement 1/{TEAM_SWITCH_SPAM_THRESHOLD} : tu es déjà dans {kept_name}. Retrait de {removed_names}.",
-        2: (
-            f"🚨 Avertissement 2/{TEAM_SWITCH_SPAM_THRESHOLD} : Il me semble avoir été clair nan ? "
-            f"Retrait de {removed_names}."
-        ),
-    }
-    user_warning_message = warning_messages.get(
-        violations,
-        (
-            f"⛔ Avertissement {TEAM_SWITCH_SPAM_THRESHOLD}/{TEAM_SWITCH_SPAM_THRESHOLD} : spam détecté. "
-            "Tu es retiré de ta team actuelle et envoyer dans la fosse."
-        ),
-    )
-
-    try:
-        await after.send(
-            embed=build_embed(
-                "Une seule team autorisée",
-                user_warning_message,
-                WARNING_COLOR,
-            )
-        )
-    except discord.HTTPException:
-        pass
-
-    if violations >= TEAM_SWITCH_SPAM_THRESHOLD:
-        delinquent_role = guild.get_role(DELINQUENT_ROLE_ID)
-        restored_role = guild.get_role(TEAM_SPAM_RESTORE_ROLE_ID)
-        kept_role_id = kept_role.id if kept_role is not None else None
         try:
-            if kept_role is not None:
-                await after.remove_roles(kept_role, reason="Spam de changement de team (3 avertissements)")
-            if restored_role is not None and restored_role in after.roles:
-                await after.remove_roles(restored_role, reason="Spam de changement de team (3 avertissements)")
-            if delinquent_role is not None and delinquent_role not in after.roles:
-                await after.add_roles(delinquent_role, reason="Spam de changement de team (3 avertissements)")
+            await current_member.remove_roles(*removed_roles, reason="Un membre ne peut appartenir qu'à une seule team")
+        except discord.HTTPException:
+            return
+
+        kept_team_roles = [role for role in after_team_roles if role.id not in {removed.id for removed in removed_roles}]
+        kept_role = kept_team_roles[0] if kept_team_roles else None
+        removed_names = ", ".join(f"**{role.name}**" for role in removed_roles)
+        kept_name = f"**{kept_role.name}**" if kept_role is not None else "aucune"
+        violations = team_switch_violations.get(current_member.id, 0) + 1
+        team_switch_violations[current_member.id] = violations
+
+        warning_messages = {
+            1: f"⚠️ Avertissement 1/{TEAM_SWITCH_SPAM_THRESHOLD} : tu es déjà dans {kept_name}. Retrait de {removed_names}.",
+            2: (
+                f"🚨 Avertissement 2/{TEAM_SWITCH_SPAM_THRESHOLD} : Il me semble avoir été clair nan ? "
+                f"Retrait de {removed_names}."
+            ),
+        }
+        user_warning_message = warning_messages.get(
+            violations,
+            (
+                f"⛔ Avertissement {TEAM_SWITCH_SPAM_THRESHOLD}/{TEAM_SWITCH_SPAM_THRESHOLD} : spam détecté. "
+                "Tu es retiré de ta team actuelle et envoyé dans la fosse."
+            ),
+        )
+
+        try:
+            await current_member.send(
+                embed=build_embed(
+                    "Une seule team autorisée",
+                    user_warning_message,
+                    WARNING_COLOR,
+                )
+            )
         except discord.HTTPException:
             pass
-        finally:
-            team_switch_violations[after.id] = 0
-            existing_restore_task = team_spam_restore_tasks.get(after.id)
-            if existing_restore_task is not None:
-                existing_restore_task.cancel()
-            team_spam_restore_tasks[after.id] = asyncio.create_task(
-                restore_member_after_team_spam(guild.id, after.id, kept_role_id)
-            )
 
-    team_ping_text = ""
-    team_ping_content = None
-    if violations >= TEAM_SWITCH_SPAM_THRESHOLD:
-        ping_role_id = kept_role.id if kept_role is not None else None
-        if ping_role_id is None and kept_role is None:
-            for _team_name, team_data in teams.get("teams", {}).items():
-                if team_data.get("role_id") in {role.id for role in before_team_roles}:
-                    ping_role_id = team_data.get("role_id")
-                    break
+        if violations >= TEAM_SWITCH_SPAM_THRESHOLD:
+            delinquent_role = guild.get_role(DELINQUENT_ROLE_ID)
+            restored_role = guild.get_role(TEAM_SPAM_RESTORE_ROLE_ID)
+            kept_role_id = kept_role.id if kept_role is not None else None
+            try:
+                if kept_role is not None:
+                    await current_member.remove_roles(kept_role, reason="Spam de changement de team (3 avertissements)")
+                if restored_role is not None and restored_role in current_member.roles:
+                    await current_member.remove_roles(restored_role, reason="Spam de changement de team (3 avertissements)")
+                if delinquent_role is not None and delinquent_role not in current_member.roles:
+                    await current_member.add_roles(delinquent_role, reason="Spam de changement de team (3 avertissements)")
+            except discord.HTTPException:
+                pass
+            finally:
+                team_switch_violations[current_member.id] = 0
+                existing_restore_task = team_spam_restore_tasks.get(current_member.id)
+                if existing_restore_task is not None:
+                    existing_restore_task.cancel()
+                team_spam_restore_tasks[current_member.id] = asyncio.create_task(
+                    restore_member_after_team_spam(guild.id, current_member.id, kept_role_id)
+                )
 
-        if ping_role_id is not None:
-            team_ping_text = f" ⚠️ Team concernée: <@&{ping_role_id}>."
-            team_ping_content = f"<@&{ping_role_id}>"
+        team_ping_text = ""
+        team_ping_content = None
+        if violations >= TEAM_SWITCH_SPAM_THRESHOLD:
+            ping_role_id = kept_role.id if kept_role is not None else None
+            if ping_role_id is None and kept_role is None:
+                for _team_name, team_data in teams.get("teams", {}).items():
+                    if team_data.get("role_id") in {role.id for role in before_team_roles}:
+                        ping_role_id = team_data.get("role_id")
+                        break
 
-    alert_channel = guild.get_channel(TEAM_SWITCH_ALERT_CHANNEL_ID)
-    if isinstance(alert_channel, discord.TextChannel):
-        await alert_channel.send(
-            content=team_ping_content,
-            embed=build_embed(
-                "Team multiple bloquée",
-                (
-                    f"{after.mention} a tenté un changement de team. "
-                    f"Avertissement **{min(violations, TEAM_SWITCH_SPAM_THRESHOLD)}/{TEAM_SWITCH_SPAM_THRESHOLD}**."
-                    + (
-                        " Sanction appliquée : retrait de sa team + rôle **Délinquant** + envoyé à la fosse."
-                        if violations >= TEAM_SWITCH_SPAM_THRESHOLD
-                        else f" Retrait de {removed_names}."
-                    )
-                    + team_ping_text
+            if ping_role_id is not None:
+                team_ping_text = f" ⚠️ Team concernée: <@&{ping_role_id}>."
+                team_ping_content = f"<@&{ping_role_id}>"
+
+        alert_channel = guild.get_channel(TEAM_SWITCH_ALERT_CHANNEL_ID)
+        if isinstance(alert_channel, discord.TextChannel):
+            await alert_channel.send(
+                content=team_ping_content,
+                embed=build_embed(
+                    "Team multiple bloquée",
+                    (
+                        f"{current_member.mention} a tenté un changement de team. "
+                        f"Avertissement **{min(violations, TEAM_SWITCH_SPAM_THRESHOLD)}/{TEAM_SWITCH_SPAM_THRESHOLD}**."
+                        + (
+                            " Sanction appliquée : retrait de sa team + rôle **Délinquant** + envoyé à la fosse."
+                            if violations >= TEAM_SWITCH_SPAM_THRESHOLD
+                            else f" Retrait de {removed_names}."
+                        )
+                        + team_ping_text
+                    ),
+                    WARNING_COLOR,
                 ),
-                WARNING_COLOR,
-            ),
-            allowed_mentions=discord.AllowedMentions(roles=True),
-        )
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
 
 
 def team_role_ids_for_member(member: discord.Member) -> set[int]:

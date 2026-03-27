@@ -550,12 +550,23 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
             )
 
     team_ping_text = ""
-    if violations >= TEAM_SWITCH_SPAM_THRESHOLD and kept_role is not None:
-        team_ping_text = f" ⚠️ Team concernée: {kept_role.mention}."
+    team_ping_content = None
+    if violations >= TEAM_SWITCH_SPAM_THRESHOLD:
+        ping_role_id = kept_role.id if kept_role is not None else None
+        if ping_role_id is None and kept_role is None:
+            for _team_name, team_data in teams.get("teams", {}).items():
+                if team_data.get("role_id") in {role.id for role in before_team_roles}:
+                    ping_role_id = team_data.get("role_id")
+                    break
+
+        if ping_role_id is not None:
+            team_ping_text = f" ⚠️ Team concernée: <@&{ping_role_id}>."
+            team_ping_content = f"<@&{ping_role_id}>"
 
     alert_channel = guild.get_channel(TEAM_SWITCH_ALERT_CHANNEL_ID)
     if isinstance(alert_channel, discord.TextChannel):
         await alert_channel.send(
+            content=team_ping_content,
             embed=build_embed(
                 "Team multiple bloquée",
                 (
@@ -569,7 +580,8 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
                     + team_ping_text
                 ),
                 WARNING_COLOR,
-            )
+            ),
+            allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
 

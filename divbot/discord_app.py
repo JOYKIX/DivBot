@@ -639,6 +639,28 @@ async def team_record(
     )
 
 
+@team_group.command(name="reset", description="Remettre points, victoires et défaites d'une équipe à zéro")
+@app_commands.describe(role="Rôle de l'équipe")
+@app_commands.check(is_discord_moderator)
+async def team_reset(interaction: discord.Interaction, role: discord.Role) -> None:
+    name = role.name.lower()
+    if name not in teams["teams"]:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
+        return
+
+    team_data = teams["teams"][name]
+    team_data["points"] = 0
+    team_data["wins"] = 0
+    team_data["losses"] = 0
+    save_teams()
+    await send_interaction_embed(
+        interaction,
+        "Statistiques réinitialisées",
+        f"**{role.name}** a maintenant **0 point**, **0 victoire** et **0 défaite**.",
+        SUCCESS_COLOR,
+    )
+
+
 @team_group.command(name="limit", description="Définir la limite max de membres par team")
 @app_commands.describe(limit="0 = illimité, sinon nombre max de membres par team")
 @app_commands.check(is_discord_moderator)
@@ -775,6 +797,7 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_edit.error
 @team_points.error
 @team_record.error
+@team_reset.error
 @team_limit.error
 @team_captain.error
 @team_motto.error

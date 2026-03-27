@@ -107,6 +107,12 @@ class DiscordBot(discord_commands.Bot):
         if before.roles == after.roles:
             return
         await enforce_team_limit_for_member(after)
+        if team_role_ids_for_member(before) != team_role_ids_for_member(after):
+            await refresh_registered_leaderboards()
+
+    async def on_member_remove(self, member: discord.Member) -> None:
+        if team_role_ids_for_member(member):
+            await refresh_registered_leaderboards()
 
 
 class LinkAccountView(discord.ui.View):
@@ -386,6 +392,14 @@ async def enforce_team_limit_for_member(member: discord.Member) -> None:
         )
 
 
+def team_role_ids_for_member(member: discord.Member) -> set[int]:
+    return {
+        role.id
+        for role in member.roles
+        if get_team_entry_by_role(role) is not None
+    }
+
+
 @link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")
 async def link_remove(interaction: discord.Interaction) -> None:
     await handle_unlink_request(interaction)
@@ -639,10 +653,34 @@ async def team_record(
     )
 
 
-@team_group.command(name="reset", description="Remettre points, victoires et défaites d'une équipe à zéro")
-@app_commands.describe(role="Rôle de l'équipe")
+@team_group.command(name="reset", description="Réinitialiser une équipe (ou toutes si aucun rôle n'est indiqué)")
+@app_commands.describe(role="Rôle de l'équipe (optionnel : vide pour tout réinitialiser)")
 @app_commands.check(is_discord_moderator)
-async def team_reset(interaction: discord.Interaction, role: discord.Role) -> None:
+async def team_reset(interaction: discord.Interaction, role: discord.Role | None = None) -> None:
+    if role is None:
+        if not teams["teams"]:
+            await send_interaction_embed(
+                interaction,
+                "Aucune équipe",
+                "Aucune équipe n'est configurée à réinitialiser.",
+                WARNING_COLOR,
+                ephemeral=True,
+            )
+            return
+
+        for team_data in teams["teams"].values():
+            team_data["points"] = 0
+            team_data["wins"] = 0
+            team_data["losses"] = 0
+        save_teams()
+        await send_interaction_embed(
+            interaction,
+            "Statistiques réinitialisées",
+            "Toutes les équipes ont maintenant **0 point**, **0 victoire** et **0 défaite**.",
+            SUCCESS_COLOR,
+        )
+        return
+
     name = role.name.lower()
     if name not in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)

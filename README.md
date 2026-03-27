@@ -45,6 +45,7 @@ Le code est maintenant séparé en modules simples :
 - `/team edit`
 - `/team motto`
 - `/team points`
+- `/team record`
 - `/team limit`
 - `/team captain`
 - `/team vicecaptain`

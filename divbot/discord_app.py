@@ -587,6 +587,62 @@ async def team_points(interaction: discord.Interaction, role: discord.Role, amou
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
 
+@team_group.command(name="record", description="Modifier le nombre de victoires et/ou défaites d'une équipe")
+@app_commands.describe(
+    role="Rôle de l'équipe",
+    wins="Nouveau total de victoires (optionnel)",
+    losses="Nouveau total de défaites (optionnel)",
+)
+@app_commands.check(is_discord_moderator)
+async def team_record(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    wins: int | None = None,
+    losses: int | None = None,
+) -> None:
+    name = role.name.lower()
+    if name not in teams["teams"]:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if wins is None and losses is None:
+        await send_interaction_embed(
+            interaction,
+            "Aucune modification",
+            "Tu dois renseigner `wins`, `losses`, ou les deux.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    if wins is not None and wins < 0:
+        await send_interaction_embed(interaction, "Valeur invalide", "Le nombre de victoires doit être supérieur ou égal à 0.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if losses is not None and losses < 0:
+        await send_interaction_embed(interaction, "Valeur invalide", "Le nombre de défaites doit être supérieur ou égal à 0.", ERROR_COLOR, ephemeral=True)
+        return
+
+    team_data = teams["teams"][name]
+    updates: list[str] = []
+
+    if wins is not None:
+        team_data["wins"] = wins
+        updates.append(f"Victoires → **{wins}**")
+
+    if losses is not None:
+        team_data["losses"] = losses
+        updates.append(f"Défaites → **{losses}**")
+
+    save_teams()
+    await send_interaction_embed(
+        interaction,
+        "Bilan mis à jour",
+        f"**{role.name}**\n" + "\n".join(f"• {update}" for update in updates),
+        SUCCESS_COLOR,
+    )
+
+
 @team_group.command(name="limit", description="Définir la limite max de membres par team")
 @app_commands.describe(limit="0 = illimité, sinon nombre max de membres par team")
 @app_commands.check(is_discord_moderator)
@@ -722,6 +778,7 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_delete.error
 @team_edit.error
 @team_points.error
+@team_record.error
 @team_limit.error
 @team_captain.error
 @team_motto.error

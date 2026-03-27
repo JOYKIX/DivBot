@@ -217,7 +217,7 @@ TEAM_SWITCH_ALERT_CHANNEL_ID = 1487218240647205054
 DELINQUENT_ROLE_ID = 1487122699275862099
 TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
-TEAM_SPAM_RESTORE_DELAY_SECONDS = 10  # 24h en production : 60 * 60 * 24
+TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
 team_switch_violations: dict[int, int] = {}
 team_spam_restore_tasks: dict[int, asyncio.Task[None]] = {}
 
@@ -550,7 +550,7 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
                     f"{after.mention} a tenté un changement de team. "
                     f"Avertissement **{min(violations, TEAM_SWITCH_SPAM_THRESHOLD)}/{TEAM_SWITCH_SPAM_THRESHOLD}**."
                     + (
-                        " Sanction appliquée : retrait de sa team + rôle **Délinquant**."
+                        " Sanction appliquée : retrait de sa team + rôle **Délinquant** + envoyé à la fosse."
                         if violations >= TEAM_SWITCH_SPAM_THRESHOLD
                         else f" Retrait de {removed_names}."
                     )

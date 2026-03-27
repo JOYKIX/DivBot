@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 import discord
@@ -150,7 +151,13 @@ def leaderboard_embed(guild: discord.Guild) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Utilise /team @nomdelateam pour afficher le détail complet d'une équipe.")
+    refreshed_at = int(datetime.now(timezone.utc).timestamp())
+    embed.set_footer(
+        text=(
+            "Utilise /team @nomdelateam pour afficher le détail complet d'une équipe. "
+            f"• Dernière actualisation : <t:{refreshed_at}:R>"
+        )
+    )
     return embed
 
 

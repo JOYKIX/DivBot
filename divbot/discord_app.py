@@ -110,6 +110,8 @@ class DiscordBot(discord_commands.Bot):
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         if before.roles == after.roles:
             return
+        if await enforce_delinquent_team_block(before, after):
+            return
         await enforce_single_team_membership(before, after)
         await enforce_team_limit_for_member(after)
         if team_role_ids_for_member(before) != team_role_ids_for_member(after):
@@ -466,6 +468,47 @@ async def enforce_team_limit_for_member(member: discord.Member) -> None:
                 WARNING_COLOR,
             )
         )
+
+
+async def enforce_delinquent_team_block(before: discord.Member, after: discord.Member) -> bool:
+    delinquent_role = after.guild.get_role(DELINQUENT_ROLE_ID)
+    if delinquent_role is None or delinquent_role not in after.roles:
+        return False
+
+    before_team_role_ids = {
+        role.id
+        for role in before.roles
+        if get_team_entry_by_role(role) is not None
+    }
+    blocked_team_roles = [
+        role
+        for role in after.roles
+        if get_team_entry_by_role(role) is not None and role.id not in before_team_role_ids
+    ]
+    if not blocked_team_roles:
+        return False
+
+    try:
+        await after.remove_roles(*blocked_team_roles, reason="Le rôle Délinquant empêche de rejoindre une team")
+    except discord.HTTPException:
+        return False
+
+    blocked_team_names = ", ".join(f"**{role.name}**" for role in blocked_team_roles)
+    try:
+        await after.send(
+            embed=build_embed(
+                "🚫 Team refusée",
+                (
+                    "T'as été un vilain garnement 😈\n"
+                    f"Impossible de rejoindre {blocked_team_names} tant que tu as le rôle **Délinquant**."
+                ),
+                WARNING_COLOR,
+            )
+        )
+    except discord.HTTPException:
+        pass
+
+    return True
 
 
 async def enforce_single_team_membership(before: discord.Member, after: discord.Member) -> None:

@@ -3,6 +3,9 @@ import os
 import random
 import string
 import time
+import asyncio
+import inspect
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +80,7 @@ config = load_json("config.json", {"rules": [], "max_team_members": 0})
 cooldowns: dict[str, float] = {}
 pending_codes: dict[str, dict[str, Any]] = {}
 active_duel: dict[str, Any] | None = None
+team_update_callbacks: list[Callable[[], Awaitable[None] | None]] = []
 
 
 def generate_code() -> str:
@@ -85,6 +89,27 @@ def generate_code() -> str:
 
 def save_teams() -> None:
     save_json("teams.json", teams)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    loop.create_task(notify_team_updates())
+
+
+def register_team_update_callback(callback: Callable[[], Awaitable[None] | None]) -> None:
+    if callback not in team_update_callbacks:
+        team_update_callbacks.append(callback)
+
+
+async def notify_team_updates() -> None:
+    for callback in list(team_update_callbacks):
+        try:
+            callback_result = callback()
+            if inspect.isawaitable(callback_result):
+                await callback_result
+        except Exception:
+            continue
 
 
 def save_links() -> None:

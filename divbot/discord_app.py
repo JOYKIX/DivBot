@@ -549,6 +549,10 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
                 restore_member_after_team_spam(guild.id, after.id, kept_role_id)
             )
 
+    team_ping_text = ""
+    if violations >= TEAM_SWITCH_SPAM_THRESHOLD and kept_role is not None:
+        team_ping_text = f" ⚠️ Team concernée: {kept_role.mention}."
+
     alert_channel = guild.get_channel(TEAM_SWITCH_ALERT_CHANNEL_ID)
     if isinstance(alert_channel, discord.TextChannel):
         await alert_channel.send(
@@ -562,6 +566,7 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
                         if violations >= TEAM_SWITCH_SPAM_THRESHOLD
                         else f" Retrait de {removed_names}."
                     )
+                    + team_ping_text
                 ),
                 WARNING_COLOR,
             )

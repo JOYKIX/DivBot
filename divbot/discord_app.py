@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import discord
@@ -178,6 +179,32 @@ class LinkCodeView(discord.ui.View):
 
 
 discord_bot = DiscordBot()
+LEADERBOARD_REFRESH_SECONDS = 10
+leaderboard_refresh_tasks: dict[int, asyncio.Task[None]] = {}
+
+
+async def refresh_leaderboard_message(message: discord.Message, guild: discord.Guild) -> None:
+    message_id = message.id
+    try:
+        while True:
+            await asyncio.sleep(LEADERBOARD_REFRESH_SECONDS)
+            try:
+                await message.edit(embed=leaderboard_embed(guild))
+            except discord.HTTPException:
+                continue
+    except (discord.NotFound, discord.Forbidden):
+        pass
+    finally:
+        leaderboard_refresh_tasks.pop(message_id, None)
+
+
+def schedule_leaderboard_refresh(message: discord.Message, guild: discord.Guild) -> None:
+    existing_task = leaderboard_refresh_tasks.pop(message.id, None)
+    if existing_task is not None:
+        existing_task.cancel()
+
+    refresh_task = asyncio.create_task(refresh_leaderboard_message(message, guild))
+    leaderboard_refresh_tasks[message.id] = refresh_task
 
 
 async def handle_unlink_request(interaction: discord.Interaction) -> None:
@@ -592,9 +619,12 @@ async def team_leaderboard(interaction: discord.Interaction) -> None:
 
     embed = leaderboard_embed(guild)
     if interaction.response.is_done():
-        await interaction.followup.send(embed=embed)
-        return
-    await interaction.response.send_message(embed=embed)
+        sent_message = await interaction.followup.send(embed=embed, wait=True)
+    else:
+        await interaction.response.send_message(embed=embed)
+        sent_message = await interaction.original_response()
+
+    schedule_leaderboard_refresh(sent_message, guild)
 
 
 @team_group.command(name="list", description="Afficher les membres et les statistiques des équipes")

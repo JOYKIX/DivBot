@@ -106,6 +106,7 @@ class DiscordBot(discord_commands.Bot):
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         if before.roles == after.roles:
             return
+        await enforce_single_team_membership(before, after)
         await enforce_team_limit_for_member(after)
         if team_role_ids_for_member(before) != team_role_ids_for_member(after):
             await refresh_registered_leaderboards()
@@ -416,6 +417,60 @@ async def enforce_team_limit_for_member(member: discord.Member) -> None:
                 WARNING_COLOR,
             )
         )
+
+
+async def enforce_single_team_membership(before: discord.Member, after: discord.Member) -> None:
+    guild = after.guild
+    before_team_roles = [role for role in before.roles if get_team_entry_by_role(role) is not None]
+    after_team_roles = [role for role in after.roles if get_team_entry_by_role(role) is not None]
+    if len(after_team_roles) <= 1:
+        return
+
+    protected_role_ids = {role.id for role in before_team_roles}
+    removed_roles = []
+    for role in after_team_roles:
+        if role.id in protected_role_ids:
+            continue
+        removed_roles.append(role)
+
+    if not removed_roles:
+        kept_role = max(after_team_roles, key=lambda role: role.position)
+        removed_roles = [role for role in after_team_roles if role.id != kept_role.id]
+
+    if not removed_roles:
+        return
+
+    try:
+        await after.remove_roles(*removed_roles, reason="Un membre ne peut appartenir qu'à une seule team")
+    except discord.HTTPException:
+        return
+
+    kept_team_roles = [role for role in after_team_roles if role.id not in {removed.id for removed in removed_roles}]
+    kept_role = kept_team_roles[0] if kept_team_roles else None
+    removed_names = ", ".join(f"**{role.name}**" for role in removed_roles)
+    kept_name = f"**{kept_role.name}**" if kept_role is not None else "aucune"
+
+    try:
+        await after.send(
+            embed=build_embed(
+                "Une seule team autorisée",
+                f"Tu es déjà dans {kept_name}. Retrait de {removed_names}.",
+                WARNING_COLOR,
+            )
+        )
+    except discord.HTTPException:
+        pass
+
+    alert_channel = guild.system_channel
+    if alert_channel is None:
+        return
+    await alert_channel.send(
+        embed=build_embed(
+            "Team multiple bloquée",
+            f"{after.mention} ne peut pas être dans plusieurs teams. Retrait de {removed_names}.",
+            WARNING_COLOR,
+        )
+    )
 
 
 def team_role_ids_for_member(member: discord.Member) -> set[int]:

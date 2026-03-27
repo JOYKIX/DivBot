@@ -154,7 +154,7 @@ def leaderboard_embed(guild: discord.Guild) -> discord.Embed:
     refreshed_at = int(datetime.now(timezone.utc).timestamp())
     embed.set_footer(
         text=(
-            "Utilise /team @nomdelateam pour afficher le détail complet d'une équipe. "
+            "Utilise /team detail @nomdelateam pour afficher le détail complet d'une équipe. "
             f"• Dernière actualisation : <t:{refreshed_at}:R>"
         )
     )

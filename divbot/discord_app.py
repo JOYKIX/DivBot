@@ -182,9 +182,9 @@ class LinkAccountView(discord.ui.View):
                 "1. Appuie sur **🔗 Link Discord ↔ Twitch**.\n"
                 "2. Copie la commande générée, puis envoie-la dans le chat Twitch.\n"
                 "3. Envoie un deuxième message avec l'emote de la division souhaitée :\n"
-                "   • `<:Les_Malicieux:1484997361569890416>`\n"
-                "   • `<:Les_Audacieux:1484997333740683417>`\n"
-                "   • `<:Les_Radieux:1484997282951594095>`\n\n"
+                "   • <:Les_Malicieux:1484997361569890416>\n"
+                "   • <:Les_Audacieux:1484997333740683417>\n"
+                "   • <:Les_Radieux:1484997282951594095>\n\n"
                 "✅ Une fois fait, tu rejoins ta division et son salon dédié s'ouvre pour toi."
             ),
             INFO_COLOR,

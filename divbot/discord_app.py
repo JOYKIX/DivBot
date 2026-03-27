@@ -459,7 +459,7 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
     warning_messages = {
         1: f"⚠️ Avertissement 1/{TEAM_SWITCH_SPAM_THRESHOLD} : tu es déjà dans {kept_name}. Retrait de {removed_names}.",
         2: (
-            f"🚨 Avertissement 2/{TEAM_SWITCH_SPAM_THRESHOLD} : arrêt immédiat du spam de changement d'équipe. "
+            f"🚨 Avertissement 2/{TEAM_SWITCH_SPAM_THRESHOLD} : Il me semble avoir été clair nan ? "
             f"Retrait de {removed_names}."
         ),
     }
@@ -467,7 +467,7 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
         violations,
         (
             f"⛔ Avertissement {TEAM_SWITCH_SPAM_THRESHOLD}/{TEAM_SWITCH_SPAM_THRESHOLD} : spam détecté. "
-            "Tu es retiré de ta team actuelle et placé sous surveillance."
+            "Tu es retiré de ta team actuelle et envoyer dans la fosse."
         ),
     )
 

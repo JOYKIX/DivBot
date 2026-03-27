@@ -1,4 +1,3 @@
-import asyncio
 import time
 
 import discord
@@ -20,6 +19,7 @@ from divbot.common import (
     links,
     pending_codes,
     remove_pending_codes_for_discord_user,
+    register_team_update_callback,
     save_config,
     save_links,
     save_teams,
@@ -179,32 +179,28 @@ class LinkCodeView(discord.ui.View):
 
 
 discord_bot = DiscordBot()
-LEADERBOARD_REFRESH_SECONDS = 10
-leaderboard_refresh_tasks: dict[int, asyncio.Task[None]] = {}
+leaderboard_messages: dict[int, discord.Message] = {}
 
 
-async def refresh_leaderboard_message(message: discord.Message, guild: discord.Guild) -> None:
-    message_id = message.id
-    try:
-        while True:
-            await asyncio.sleep(LEADERBOARD_REFRESH_SECONDS)
-            try:
-                await message.edit(embed=leaderboard_embed(guild))
-            except discord.HTTPException:
-                continue
-    except (discord.NotFound, discord.Forbidden):
-        pass
-    finally:
-        leaderboard_refresh_tasks.pop(message_id, None)
+async def refresh_registered_leaderboards() -> None:
+    for message_id, message in list(leaderboard_messages.items()):
+        guild = message.guild
+        if guild is None:
+            leaderboard_messages.pop(message_id, None)
+            continue
+        try:
+            await message.edit(embed=leaderboard_embed(guild))
+        except (discord.NotFound, discord.Forbidden):
+            leaderboard_messages.pop(message_id, None)
+        except discord.HTTPException:
+            continue
 
 
-def schedule_leaderboard_refresh(message: discord.Message, guild: discord.Guild) -> None:
-    existing_task = leaderboard_refresh_tasks.pop(message.id, None)
-    if existing_task is not None:
-        existing_task.cancel()
+register_team_update_callback(refresh_registered_leaderboards)
 
-    refresh_task = asyncio.create_task(refresh_leaderboard_message(message, guild))
-    leaderboard_refresh_tasks[message.id] = refresh_task
+
+def register_leaderboard_message(message: discord.Message) -> None:
+    leaderboard_messages[message.id] = message
 
 
 async def handle_unlink_request(interaction: discord.Interaction) -> None:
@@ -680,7 +676,7 @@ async def team_leaderboard(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(embed=embed)
         sent_message = await interaction.original_response()
 
-    schedule_leaderboard_refresh(sent_message, guild)
+    register_leaderboard_message(sent_message)
 
 
 @team_group.command(name="list", description="Afficher les membres et les statistiques des équipes")

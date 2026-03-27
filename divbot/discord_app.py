@@ -166,6 +166,31 @@ class LinkAccountView(discord.ui.View):
             view=LinkCodeView(code),
         )
 
+    @discord.ui.button(
+        label="Comment rejoindre une division",
+        style=discord.ButtonStyle.secondary,
+        emoji="🧭",
+        custom_id="how_to_join_division",
+        row=1,
+    )
+    async def how_to_join_division_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await send_interaction_embed(
+            interaction,
+            "Comment rejoindre une division",
+            (
+                "Pour rejoindre une division (**Les malicieux**, **Les audacieux** ou **Les radieux**) :\n\n"
+                "1. Appuie sur **🔗 Link Discord ↔ Twitch**.\n"
+                "2. Copie la commande générée, puis envoie-la dans le chat Twitch.\n"
+                "3. Envoie un deuxième message avec l'emote de la division souhaitée :\n"
+                "   • `:Les_Malicieux:`\n"
+                "   • `:Les_Audacieux:`\n"
+                "   • `:Les_Radieux:`\n\n"
+                "✅ Une fois fait, tu rejoins ta division et son salon dédié s'ouvre pour toi."
+            ),
+            INFO_COLOR,
+            ephemeral=True,
+        )
+
 
 class LinkCodeView(discord.ui.View):
     def __init__(self, code: str) -> None:
@@ -237,6 +262,7 @@ async def handle_linkpanel_request(interaction: discord.Interaction) -> None:
             "Clique sur le bouton ci-dessous pour obtenir un **code privé**.\n"
             "Ensuite, envoie ce code dans le chat Twitch avec `!link CODE`.\n\n"
             "Exemple : `!link ABC123`\n"
+            "Besoin d'aide pour choisir une division ? Utilise le bouton **Comment rejoindre une division**.\n"
             "🟣 Twitch : https://www.twitch.tv/zogaa_"
         ),
         INFO_COLOR,

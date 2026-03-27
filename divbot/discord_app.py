@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import discord
@@ -214,8 +215,44 @@ discord_bot = DiscordBot()
 leaderboard_messages: dict[int, discord.Message] = {}
 TEAM_SWITCH_ALERT_CHANNEL_ID = 1487218240647205054
 DELINQUENT_ROLE_ID = 1487122699275862099
+TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
+TEAM_SPAM_RESTORE_DELAY_SECONDS = 10  # 24h en production : 60 * 60 * 24
 team_switch_violations: dict[int, int] = {}
+team_spam_restore_tasks: dict[int, asyncio.Task[None]] = {}
+
+
+async def restore_member_after_team_spam(guild_id: int, member_id: int, team_role_id: int | None) -> None:
+    await asyncio.sleep(TEAM_SPAM_RESTORE_DELAY_SECONDS)
+
+    guild = discord_bot.get_guild(guild_id)
+    if guild is None:
+        return
+
+    member = guild.get_member(member_id)
+    if member is None:
+        return
+
+    delinquent_role = guild.get_role(DELINQUENT_ROLE_ID)
+    restored_role = guild.get_role(TEAM_SPAM_RESTORE_ROLE_ID)
+    team_role = guild.get_role(team_role_id) if team_role_id is not None else None
+
+    try:
+        if delinquent_role is not None and delinquent_role in member.roles:
+            await member.remove_roles(delinquent_role, reason="Fin de sanction pour spam de changement de team")
+
+        roles_to_restore = []
+        if restored_role is not None and restored_role not in member.roles:
+            roles_to_restore.append(restored_role)
+        if team_role is not None and team_role not in member.roles:
+            roles_to_restore.append(team_role)
+
+        if roles_to_restore:
+            await member.add_roles(*roles_to_restore, reason="Fin de sanction pour spam de changement de team")
+    except discord.HTTPException:
+        pass
+    finally:
+        team_spam_restore_tasks.pop(member_id, None)
 
 
 async def refresh_registered_leaderboards() -> None:
@@ -484,15 +521,25 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
 
     if violations >= TEAM_SWITCH_SPAM_THRESHOLD:
         delinquent_role = guild.get_role(DELINQUENT_ROLE_ID)
+        restored_role = guild.get_role(TEAM_SPAM_RESTORE_ROLE_ID)
+        kept_role_id = kept_role.id if kept_role is not None else None
         try:
             if kept_role is not None:
                 await after.remove_roles(kept_role, reason="Spam de changement de team (3 avertissements)")
+            if restored_role is not None and restored_role in after.roles:
+                await after.remove_roles(restored_role, reason="Spam de changement de team (3 avertissements)")
             if delinquent_role is not None and delinquent_role not in after.roles:
                 await after.add_roles(delinquent_role, reason="Spam de changement de team (3 avertissements)")
         except discord.HTTPException:
             pass
         finally:
             team_switch_violations[after.id] = 0
+            existing_restore_task = team_spam_restore_tasks.get(after.id)
+            if existing_restore_task is not None:
+                existing_restore_task.cancel()
+            team_spam_restore_tasks[after.id] = asyncio.create_task(
+                restore_member_after_team_spam(guild.id, after.id, kept_role_id)
+            )
 
     alert_channel = guild.get_channel(TEAM_SWITCH_ALERT_CHANNEL_ID)
     if isinstance(alert_channel, discord.TextChannel):

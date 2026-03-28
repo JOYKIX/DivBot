@@ -22,12 +22,12 @@ from divbot.common import (
     pending_codes,
     remove_pending_codes_for_discord_user,
     register_team_update_callback,
-    save_json,
+    save_data,
     save_config,
     save_links,
     save_teams,
     teams,
-    load_json,
+    load_data,
     unlink_discord_user,
 )
 from divbot.team_logic import (
@@ -237,18 +237,18 @@ class LinkCodeView(discord.ui.View):
 discord_bot = DiscordBot()
 leaderboard_messages: dict[int, discord.Message] = {}
 LEADERBOARD_CHANNEL_ID = 1487174285368758354
-LEADERBOARD_STATE_FILE = "leaderboard.json"
-leaderboard_state: dict[str, dict[str, dict[str, object]]] = load_json(LEADERBOARD_STATE_FILE, {"channels": {}})
+LEADERBOARD_STATE_KEY = "leaderboard"
+leaderboard_state: dict[str, dict[str, dict[str, object]]] = load_data(LEADERBOARD_STATE_KEY, {"channels": {}})
 TEAM_SWITCH_ALERT_CHANNEL_ID = 1487218240647205054
 DELINQUENT_ROLE_ID = 1487122699275862099
 TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
-TEAM_SPAM_PUNISHMENTS_FILE = "team_spam_punishments.json"
+TEAM_SPAM_PUNISHMENTS_KEY = "team_spam_punishments"
 team_switch_violations: dict[int, int] = {}
 team_enforcement_locks: dict[int, asyncio.Lock] = {}
-team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_json(
-    TEAM_SPAM_PUNISHMENTS_FILE, {"members": {}}
+team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_data(
+    TEAM_SPAM_PUNISHMENTS_KEY, {"members": {}}
 )
 
 if not isinstance(leaderboard_state, dict):
@@ -299,7 +299,7 @@ async def restore_member_after_team_spam(guild_id: int, member_id: int, team_rol
 
 
 def persist_team_spam_punishments() -> None:
-    save_json(TEAM_SPAM_PUNISHMENTS_FILE, team_spam_punishments)
+    save_data(TEAM_SPAM_PUNISHMENTS_KEY, team_spam_punishments)
 
 
 def register_team_spam_punishment(member_id: int, guild_id: int, team_role_id: int | None) -> None:
@@ -409,7 +409,7 @@ def register_leaderboard_message(message: discord.Message) -> None:
 
 
 def persist_leaderboard_state() -> None:
-    save_json(LEADERBOARD_STATE_FILE, leaderboard_state)
+    save_data(LEADERBOARD_STATE_KEY, leaderboard_state)
 
 
 def clear_leaderboard_registration(channel_id: int) -> None:

@@ -11,7 +11,7 @@ Le code est maintenant séparé en modules simples :
 
 - `bot.py` : point d'entrée minimal (lance le bot).
 - `divbot/main.py` : démarre Discord + Twitch en parallèle.
-- `divbot/common.py` : config `.env`, constantes, JSON et état partagé.
+- `divbot/common.py` : config `.env`, constantes, Firebase et état partagé.
 - `divbot/team_logic.py` : logique des équipes, leaderboard et duels.
 - `divbot/discord_app.py` : commandes Discord, vues UI et gestion des rôles.
 - `divbot/twitch_app.py` : commandes Twitch et liaison Twitch ↔ Discord.
@@ -64,21 +64,19 @@ Python **3.11+** recommandé :
 pip install "discord.py>=2.4.0" "twitchio>=2.10.0" "python-dotenv>=1.0.1" "firebase-admin>=6.5.0"
 ```
 
-## Stockage des données (Firebase + JSON local)
+## Stockage des données (Firebase uniquement)
 
-Le bot utilise maintenant **Firebase Realtime Database** comme source principale, et conserve en parallèle des fichiers JSON locaux à la racine :
-- `links.json`
-- `teams.json`
-- `config.json`
-- `leaderboard.json`
-- `team_spam_punishments.json`
+Le bot utilise **Firebase Realtime Database** comme unique source de vérité :
+- `links`
+- `teams`
+- `config`
+- `leaderboard`
+- `team_spam_punishments`
 
 Au lancement, le bot :
 1. initialise Firebase avec `firebase/zogbot-firebase.json` ;
-2. synchronise les JSON locaux vers Firebase si les clés n'existent pas encore ;
-3. sinon recharge les JSON locaux depuis Firebase.
-
-Ensuite chaque sauvegarde JSON est aussi poussée dans Firebase pour conserver l'état entre redémarrages.
+2. crée automatiquement les clés manquantes avec des valeurs par défaut ;
+3. charge ensuite toutes les données directement depuis Firebase.
 
 ## Configuration `.env`
 

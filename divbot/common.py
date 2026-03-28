@@ -1,4 +1,4 @@
-import json
+import copy
 import os
 import random
 import string
@@ -40,12 +40,12 @@ SUCCESS_COLOR = discord.Color.green()
 ERROR_COLOR = discord.Color.red()
 WARNING_COLOR = discord.Color.orange()
 INFO_COLOR = discord.Color.gold()
-DATA_FILES: dict[str, Any] = {
-    "links.json": {},
-    "teams.json": {"teams": {}},
-    "config.json": {"rules": [], "max_team_members": 0},
-    "leaderboard.json": {"channels": {}},
-    "team_spam_punishments.json": {"members": {}},
+DATA_DEFAULTS: dict[str, Any] = {
+    "links": {},
+    "teams": {"teams": {}},
+    "config": {"rules": [], "max_team_members": 0},
+    "leaderboard": {"channels": {}},
+    "team_spam_punishments": {"members": {}},
 }
 FIREBASE_CREDENTIALS_PATH = BASE_DIR / "firebase" / "zogbot-firebase.json"
 FIREBASE_DATABASE_URL = os.getenv(
@@ -55,43 +55,13 @@ FIREBASE_DATABASE_URL = os.getenv(
 firebase_enabled = False
 
 
-def data_path(filename: str) -> Path:
-    return BASE_DIR / filename
-
-
-def load_json(filename: str, default: Any) -> Any:
-    path = data_path(filename)
-    try:
-        with path.open("r", encoding="utf-8") as file:
-            return json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return default
-
-
-def save_json(filename: str, data: Any) -> None:
-    path = data_path(filename)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, indent=4, ensure_ascii=False)
-    if firebase_enabled:
-        db.reference(filename.removesuffix(".json")).set(data)
-
-
-def ensure_data_files() -> None:
-    for filename, default_value in DATA_FILES.items():
-        path = data_path(filename)
-        if not path.exists():
-            save_json(filename, default_value)
-
-
 def initialize_firebase() -> None:
     global firebase_enabled
     try:
         if not FIREBASE_CREDENTIALS_PATH.exists():
-            print(
-                "[FIREBASE] Fichier de credentials introuvable :"
-                f" {FIREBASE_CREDENTIALS_PATH}"
+            raise RuntimeError(
+                f"[FIREBASE] Fichier de credentials introuvable : {FIREBASE_CREDENTIALS_PATH}"
             )
-            return
 
         cred = credentials.Certificate(str(FIREBASE_CREDENTIALS_PATH))
         firebase_admin.initialize_app(
@@ -102,47 +72,39 @@ def initialize_firebase() -> None:
         print(f"[FIREBASE] Realtime Database initialisée : {FIREBASE_DATABASE_URL}")
     except ValueError:
         firebase_enabled = True
+        print(f"[FIREBASE] Realtime Database déjà initialisée : {FIREBASE_DATABASE_URL}")
     except Exception as error:
-        print(f"[FIREBASE] Initialisation impossible, fallback local JSON : {error}")
+        raise RuntimeError(f"[FIREBASE] Initialisation impossible : {error}") from error
 
 
-def sync_local_json_to_firebase() -> None:
+def load_data(key: str, default: Any) -> Any:
+    if not firebase_enabled:
+        return copy.deepcopy(default)
+    firebase_value = db.reference(key).get()
+    if firebase_value is not None:
+        return firebase_value
+    return copy.deepcopy(default)
+
+
+def save_data(key: str, data: Any) -> None:
     if not firebase_enabled:
         return
+    db.reference(key).set(data)
 
-    for filename, default_value in DATA_FILES.items():
-        key = filename.removesuffix(".json")
+
+def ensure_firebase_defaults() -> None:
+    for key, default_value in DATA_DEFAULTS.items():
         ref = db.reference(key)
-        firebase_value = ref.get()
-        local_value = load_json(filename, default_value)
-
-        if firebase_value is None:
-            ref.set(local_value)
-            continue
-
-        path = data_path(filename)
-        with path.open("w", encoding="utf-8") as file:
-            json.dump(firebase_value, file, indent=4, ensure_ascii=False)
-
-
-def load_data(filename: str, default: Any) -> Any:
-    if firebase_enabled:
-        firebase_value = db.reference(filename.removesuffix(".json")).get()
-        if firebase_value is not None:
-            path = data_path(filename)
-            with path.open("w", encoding="utf-8") as file:
-                json.dump(firebase_value, file, indent=4, ensure_ascii=False)
-            return firebase_value
-    return load_json(filename, default)
+        if ref.get() is None:
+            ref.set(copy.deepcopy(default_value))
 
 
 initialize_firebase()
-ensure_data_files()
-sync_local_json_to_firebase()
+ensure_firebase_defaults()
 
-links = load_data("links.json", {})
-teams = load_data("teams.json", {"teams": {}})
-config = load_data("config.json", {"rules": [], "max_team_members": 0})
+links = load_data("links", DATA_DEFAULTS["links"])
+teams = load_data("teams", DATA_DEFAULTS["teams"])
+config = load_data("config", DATA_DEFAULTS["config"])
 
 cooldowns: dict[str, float] = {}
 pending_codes: dict[str, dict[str, Any]] = {}
@@ -155,7 +117,7 @@ def generate_code() -> str:
 
 
 def save_teams() -> None:
-    save_json("teams.json", teams)
+    save_data("teams", teams)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -180,11 +142,11 @@ async def notify_team_updates() -> None:
 
 
 def save_links() -> None:
-    save_json("links.json", links)
+    save_data("links", links)
 
 
 def save_config() -> None:
-    save_json("config.json", config)
+    save_data("config", config)
 
 
 def normalize_config_data() -> None:

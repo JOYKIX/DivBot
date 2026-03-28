@@ -367,6 +367,21 @@ async def release_due_team_spam_members() -> None:
     persist_team_spam_punishments()
 
 
+async def clear_delinquent_status(member: discord.Member, *, reason: str) -> bool:
+    delinquent_role = member.guild.get_role(DELINQUENT_ROLE_ID)
+    if delinquent_role is None:
+        return False
+    if delinquent_role not in member.roles:
+        return False
+
+    try:
+        await member.remove_roles(delinquent_role, reason=reason)
+    except discord.HTTPException:
+        return False
+
+    return True
+
+
 async def refresh_registered_leaderboards() -> None:
     await ensure_leaderboard_channel_message(LEADERBOARD_CHANNEL_ID)
 
@@ -1130,6 +1145,44 @@ async def team_limit(interaction: discord.Interaction, limit: int) -> None:
     )
 
 
+@team_group.command(name="pardon", description="Retirer le rôle Délinquant d'un membre")
+@app_commands.describe(member="Membre à libérer de la sanction Délinquant")
+@app_commands.check(is_discord_moderator)
+async def team_pardon(interaction: discord.Interaction, member: discord.Member) -> None:
+    removed = await clear_delinquent_status(member, reason=f"Retrait manuel via /team pardon par {interaction.user}")
+    team_switch_violations.pop(member.id, None)
+    had_punishment_entry = team_spam_punishments["members"].pop(str(member.id), None) is not None
+    if had_punishment_entry:
+        persist_team_spam_punishments()
+
+    if removed:
+        details = [f"{member.mention} n'a plus le rôle **Délinquant**."]
+        if had_punishment_entry:
+            details.append("Sa sanction programmée a aussi été retirée.")
+        await send_interaction_embed(interaction, "Membre pardonné", "\n".join(details), SUCCESS_COLOR)
+        return
+
+    if had_punishment_entry:
+        await send_interaction_embed(
+            interaction,
+            "Entrée de sanction supprimée",
+            (
+                f"{member.mention} n'avait pas le rôle **Délinquant**, "
+                "mais la sanction planifiée a été supprimée."
+            ),
+            WARNING_COLOR,
+        )
+        return
+
+    await send_interaction_embed(
+        interaction,
+        "Aucune sanction active",
+        f"{member.mention} n'a pas le rôle **Délinquant**.",
+        WARNING_COLOR,
+        ephemeral=True,
+    )
+
+
 @team_group.command(name="leaderboard", description="Afficher le classement des équipes")
 async def team_leaderboard(interaction: discord.Interaction) -> None:
     guild = interaction.guild
@@ -1246,6 +1299,7 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_record.error
 @team_reset.error
 @team_limit.error
+@team_pardon.error
 @team_captain.error
 @team_motto.error
 @link_panel.error

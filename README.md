@@ -48,6 +48,7 @@ Le code est maintenant séparé en modules simples :
 - `/team record`
 - `/team reset`
 - `/team limit`
+- `/team pardon`
 - `/team captain`
 - `/team vicecaptain`
 

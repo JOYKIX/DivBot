@@ -121,7 +121,11 @@ class DiscordBot(discord_commands.Bot):
             return
         await enforce_single_team_membership(before, after)
         await enforce_team_limit_for_member(after)
-        if team_role_ids_for_member(before) != team_role_ids_for_member(after):
+        current_member = after.guild.get_member(after.id)
+        if current_member is None:
+            return
+        await announce_team_joins(before, current_member)
+        if team_role_ids_for_member(before) != team_role_ids_for_member(current_member):
             await refresh_registered_leaderboards()
 
     async def on_member_remove(self, member: discord.Member) -> None:
@@ -815,6 +819,40 @@ def team_role_ids_for_member(member: discord.Member) -> set[int]:
     }
 
 
+def get_team_channel_for_role(guild: discord.Guild, role: discord.Role) -> discord.TextChannel | None:
+    team_entry = get_team_entry_by_role(role)
+    if team_entry is None:
+        return None
+    _team_name, team_data = team_entry
+    channel_id = team_data.get("channel_id")
+    if not isinstance(channel_id, int):
+        return None
+    channel = guild.get_channel(channel_id)
+    if isinstance(channel, discord.TextChannel):
+        return channel
+    return None
+
+
+async def announce_team_joins(before: discord.Member, current_member: discord.Member) -> None:
+    before_team_role_ids = team_role_ids_for_member(before)
+    joined_team_roles = [
+        role
+        for role in current_member.roles
+        if get_team_entry_by_role(role) is not None and role.id not in before_team_role_ids
+    ]
+    if not joined_team_roles:
+        return
+
+    for role in joined_team_roles:
+        team_channel = get_team_channel_for_role(current_member.guild, role)
+        if team_channel is None:
+            continue
+        try:
+            await team_channel.send(f"🎉 {current_member.mention} a rejoint la team **{role.name}** !")
+        except discord.HTTPException:
+            continue
+
+
 @link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")
 async def link_remove(interaction: discord.Interaction) -> None:
     await handle_unlink_request(interaction)
@@ -868,9 +906,20 @@ async def rule_remove(interaction: discord.Interaction, index: int) -> None:
 
 
 @team_group.command(name="create", description="Créer une équipe à partir d'un rôle Discord")
-@app_commands.describe(role="Rôle représentant l'équipe", emoji="Emoji affiché comme blason", motto="Devise de l'équipe (optionnel)")
+@app_commands.describe(
+    role="Rôle représentant l'équipe",
+    emoji="Emoji affiché comme blason",
+    motto="Devise de l'équipe (optionnel)",
+    channel="Salon de la team (optionnel)",
+)
 @app_commands.check(is_discord_moderator)
-async def team_create(interaction: discord.Interaction, role: discord.Role, emoji: str, motto: str = "") -> None:
+async def team_create(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    emoji: str,
+    motto: str = "",
+    channel: discord.TextChannel | None = None,
+) -> None:
     name = role.name.lower()
     if name in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe existante", "Cette équipe existe déjà.", ERROR_COLOR, ephemeral=True)
@@ -885,9 +934,16 @@ async def team_create(interaction: discord.Interaction, role: discord.Role, emoj
         "captain_id": None,
         "vice_captain_id": None,
         "motto": motto.strip(),
+        "channel_id": channel.id if channel is not None else None,
     }
     save_teams()
-    await send_interaction_embed(interaction, "Équipe créée", f"Nouvelle équipe : {emoji} **{role.name}**.", SUCCESS_COLOR)
+    channel_line = f"\nSalon associé : {channel.mention}" if channel is not None else ""
+    await send_interaction_embed(
+        interaction,
+        "Équipe créée",
+        f"Nouvelle équipe : {emoji} **{role.name}**.{channel_line}",
+        SUCCESS_COLOR,
+    )
 
 
 @team_group.command(name="delete", description="Supprimer une équipe")
@@ -909,6 +965,7 @@ async def team_delete(interaction: discord.Interaction, role: discord.Role) -> N
     role="Rôle représentant l'équipe",
     emoji="Nouvel emoji (optionnel)",
     motto="Nouvelle devise (optionnel)",
+    channel="Nouveau salon d'équipe (optionnel)",
 )
 @app_commands.check(is_discord_moderator)
 async def team_edit(
@@ -916,17 +973,18 @@ async def team_edit(
     role: discord.Role,
     emoji: str | None = None,
     motto: str | None = None,
+    channel: discord.TextChannel | None = None,
 ) -> None:
     name = role.name.lower()
     if name not in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
         return
 
-    if emoji is None and motto is None:
+    if emoji is None and motto is None and channel is None:
         await send_interaction_embed(
             interaction,
             "Aucune modification",
-            "Tu dois fournir au moins un champ à modifier (emoji et/ou devise).",
+            "Tu dois fournir au moins un champ à modifier (emoji, devise et/ou salon).",
             ERROR_COLOR,
             ephemeral=True,
         )
@@ -957,6 +1015,10 @@ async def team_edit(
         team_data["motto"] = cleaned_motto
         motto_display = cleaned_motto if cleaned_motto else "Aucune devise"
         updates.append(f"Devise → *{motto_display}*")
+
+    if channel is not None:
+        team_data["channel_id"] = channel.id
+        updates.append(f"Salon → {channel.mention}")
 
     save_teams()
     await send_interaction_embed(

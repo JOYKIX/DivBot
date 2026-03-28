@@ -260,6 +260,12 @@ def normalize_team_data() -> None:
         elif not isinstance(team_data["motto"], str):
             team_data["motto"] = str(team_data["motto"])
             changed = True
+        if "channel_id" not in team_data:
+            team_data["channel_id"] = None
+            changed = True
+        elif team_data["channel_id"] is not None and not isinstance(team_data["channel_id"], int):
+            team_data["channel_id"] = normalize_int(team_data["channel_id"], 0) or None
+            changed = True
 
     for team_name in invalid_team_names:
         del teams["teams"][team_name]

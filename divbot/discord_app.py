@@ -93,6 +93,7 @@ class DiscordBot(discord_commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.synced = False
         self.leaderboard_refresh_task: asyncio.Task[None] | None = None
+        self.team_spam_release_task: asyncio.Task[None] | None = None
 
     async def setup_hook(self) -> None:
         self.tree.copy_global_to(guild=guild_object)
@@ -108,6 +109,8 @@ class DiscordBot(discord_commands.Bot):
             self.synced = True
         if self.leaderboard_refresh_task is None or self.leaderboard_refresh_task.done():
             self.leaderboard_refresh_task = asyncio.create_task(self.refresh_leaderboards_every_minute())
+        if self.team_spam_release_task is None or self.team_spam_release_task.done():
+            self.team_spam_release_task = asyncio.create_task(self.release_team_spam_members_hourly())
         print(f"[DISCORD] Connecté : {self.user}")
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
@@ -128,6 +131,12 @@ class DiscordBot(discord_commands.Bot):
         while not self.is_closed():
             await refresh_registered_leaderboards()
             sleep_seconds = max(1.0, 60 - (time.time() % 60))
+            await asyncio.sleep(sleep_seconds)
+
+    async def release_team_spam_members_hourly(self) -> None:
+        while not self.is_closed():
+            await release_due_team_spam_members()
+            sleep_seconds = max(1.0, 60 * 60 - (time.time() % (60 * 60)))
             await asyncio.sleep(sleep_seconds)
 
 
@@ -235,14 +244,21 @@ DELINQUENT_ROLE_ID = 1487122699275862099
 TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
+TEAM_SPAM_PUNISHMENTS_FILE = "team_spam_punishments.json"
 team_switch_violations: dict[int, int] = {}
-team_spam_restore_tasks: dict[int, asyncio.Task[None]] = {}
 team_enforcement_locks: dict[int, asyncio.Lock] = {}
+team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_json(
+    TEAM_SPAM_PUNISHMENTS_FILE, {"members": {}}
+)
 
 if not isinstance(leaderboard_state, dict):
     leaderboard_state = {"channels": {}}
 if "channels" not in leaderboard_state or not isinstance(leaderboard_state["channels"], dict):
     leaderboard_state["channels"] = {}
+if not isinstance(team_spam_punishments, dict):
+    team_spam_punishments = {"members": {}}
+if "members" not in team_spam_punishments or not isinstance(team_spam_punishments["members"], dict):
+    team_spam_punishments["members"] = {}
 
 
 def get_team_enforcement_lock(member_id: int) -> asyncio.Lock:
@@ -254,8 +270,6 @@ def get_team_enforcement_lock(member_id: int) -> asyncio.Lock:
 
 
 async def restore_member_after_team_spam(guild_id: int, member_id: int, team_role_id: int | None) -> None:
-    await asyncio.sleep(TEAM_SPAM_RESTORE_DELAY_SECONDS)
-
     guild = discord_bot.get_guild(guild_id)
     if guild is None:
         return
@@ -282,8 +296,67 @@ async def restore_member_after_team_spam(guild_id: int, member_id: int, team_rol
             await member.add_roles(*roles_to_restore, reason="Fin de sanction pour spam de changement de team")
     except discord.HTTPException:
         pass
-    finally:
-        team_spam_restore_tasks.pop(member_id, None)
+
+
+def persist_team_spam_punishments() -> None:
+    save_json(TEAM_SPAM_PUNISHMENTS_FILE, team_spam_punishments)
+
+
+def register_team_spam_punishment(member_id: int, guild_id: int, team_role_id: int | None) -> None:
+    now = datetime.now(timezone.utc)
+    release_at = now.timestamp() + TEAM_SPAM_RESTORE_DELAY_SECONDS
+    team_spam_punishments["members"][str(member_id)] = {
+        "guild_id": guild_id,
+        "team_role_id": team_role_id,
+        "punished_at_utc": now.isoformat(),
+        "release_at_utc": datetime.fromtimestamp(release_at, tz=timezone.utc).isoformat(),
+    }
+    persist_team_spam_punishments()
+
+
+async def release_due_team_spam_members() -> None:
+    now_utc = datetime.now(timezone.utc)
+    due_member_ids: list[str] = []
+    for member_id, punishment_data in team_spam_punishments["members"].items():
+        if not isinstance(punishment_data, dict):
+            due_member_ids.append(member_id)
+            continue
+
+        release_at_raw = punishment_data.get("release_at_utc")
+        try:
+            release_at = datetime.fromisoformat(str(release_at_raw))
+        except ValueError:
+            due_member_ids.append(member_id)
+            continue
+
+        if release_at.tzinfo is None:
+            release_at = release_at.replace(tzinfo=timezone.utc)
+        if release_at <= now_utc:
+            due_member_ids.append(member_id)
+
+    if not due_member_ids:
+        return
+
+    for member_id in due_member_ids:
+        punishment_data = team_spam_punishments["members"].get(member_id, {})
+        try:
+            guild_id = int(punishment_data.get("guild_id", 0))
+        except (TypeError, ValueError):
+            guild_id = 0
+        team_role_raw = punishment_data.get("team_role_id")
+        try:
+            team_role_id = int(team_role_raw) if team_role_raw is not None else None
+        except (TypeError, ValueError):
+            team_role_id = None
+        try:
+            member_id_int = int(member_id)
+        except ValueError:
+            member_id_int = 0
+        if guild_id > 0 and member_id_int > 0:
+            await restore_member_after_team_spam(guild_id, member_id_int, team_role_id)
+        team_spam_punishments["members"].pop(member_id, None)
+
+    persist_team_spam_punishments()
 
 
 async def refresh_registered_leaderboards() -> None:
@@ -680,12 +753,7 @@ async def enforce_single_team_membership(before: discord.Member, after: discord.
                 pass
             finally:
                 team_switch_violations[current_member.id] = 0
-                existing_restore_task = team_spam_restore_tasks.get(current_member.id)
-                if existing_restore_task is not None:
-                    existing_restore_task.cancel()
-                team_spam_restore_tasks[current_member.id] = asyncio.create_task(
-                    restore_member_after_team_spam(guild.id, current_member.id, kept_role_id)
-                )
+                register_team_spam_punishment(current_member.id, guild.id, kept_role_id)
 
         team_ping_text = ""
         team_ping_content = None

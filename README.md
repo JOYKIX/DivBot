@@ -61,17 +61,24 @@ Le code est maintenant séparé en modules simples :
 Python **3.11+** recommandé :
 
 ```bash
-pip install "discord.py>=2.4.0" "twitchio>=2.10.0" "python-dotenv>=1.0.1"
+pip install "discord.py>=2.4.0" "twitchio>=2.10.0" "python-dotenv>=1.0.1" "firebase-admin>=6.5.0"
 ```
 
-## Fichiers JSON utilisés
+## Stockage des données (Firebase + JSON local)
 
-Le bot crée ou utilise ces fichiers à la racine :
+Le bot utilise maintenant **Firebase Realtime Database** comme source principale, et conserve en parallèle des fichiers JSON locaux à la racine :
 - `links.json`
 - `teams.json`
 - `config.json`
+- `leaderboard.json`
+- `team_spam_punishments.json`
 
-Ils sont générés automatiquement au premier lancement si besoin.
+Au lancement, le bot :
+1. initialise Firebase avec `firebase/zogbot-firebase.json` ;
+2. synchronise les JSON locaux vers Firebase si les clés n'existent pas encore ;
+3. sinon recharge les JSON locaux depuis Firebase.
+
+Ensuite chaque sauvegarde JSON est aussi poussée dans Firebase pour conserver l'état entre redémarrages.
 
 ## Configuration `.env`
 
@@ -82,7 +89,12 @@ TWITCH_TOKEN=oauth:remplace_par_ton_token_twitch
 TWITCH_CHANNEL=nom_de_ta_chaine
 DISCORD_TOKEN=remplace_par_ton_token_discord
 GUILD_ID=123456789012345678
+FIREBASE_DATABASE_URL=https://zogbot-default-rtdb.europe-west1.firebasedatabase.app/
 ```
+
+Et place le fichier de service account Firebase dans :
+
+`firebase/zogbot-firebase.json`
 
 ## Lancement
 

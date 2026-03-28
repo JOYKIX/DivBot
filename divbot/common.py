@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import discord
+import firebase_admin
 from dotenv import load_dotenv
+from firebase_admin import credentials, db
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -45,6 +47,12 @@ DATA_FILES: dict[str, Any] = {
     "leaderboard.json": {"channels": {}},
     "team_spam_punishments.json": {"members": {}},
 }
+FIREBASE_CREDENTIALS_PATH = BASE_DIR / "firebase" / "zogbot-firebase.json"
+FIREBASE_DATABASE_URL = os.getenv(
+    "FIREBASE_DATABASE_URL",
+    "https://zogbot-default-rtdb.europe-west1.firebasedatabase.app/",
+)
+firebase_enabled = False
 
 
 def data_path(filename: str) -> Path:
@@ -64,6 +72,8 @@ def save_json(filename: str, data: Any) -> None:
     path = data_path(filename)
     with path.open("w", encoding="utf-8") as file:
         json.dump(data, file, indent=4, ensure_ascii=False)
+    if firebase_enabled:
+        db.reference(filename.removesuffix(".json")).set(data)
 
 
 def ensure_data_files() -> None:
@@ -73,11 +83,66 @@ def ensure_data_files() -> None:
             save_json(filename, default_value)
 
 
-ensure_data_files()
+def initialize_firebase() -> None:
+    global firebase_enabled
+    try:
+        if not FIREBASE_CREDENTIALS_PATH.exists():
+            print(
+                "[FIREBASE] Fichier de credentials introuvable :"
+                f" {FIREBASE_CREDENTIALS_PATH}"
+            )
+            return
 
-links = load_json("links.json", {})
-teams = load_json("teams.json", {"teams": {}})
-config = load_json("config.json", {"rules": [], "max_team_members": 0})
+        cred = credentials.Certificate(str(FIREBASE_CREDENTIALS_PATH))
+        firebase_admin.initialize_app(
+            cred,
+            {"databaseURL": FIREBASE_DATABASE_URL},
+        )
+        firebase_enabled = True
+        print(f"[FIREBASE] Realtime Database initialisée : {FIREBASE_DATABASE_URL}")
+    except ValueError:
+        firebase_enabled = True
+    except Exception as error:
+        print(f"[FIREBASE] Initialisation impossible, fallback local JSON : {error}")
+
+
+def sync_local_json_to_firebase() -> None:
+    if not firebase_enabled:
+        return
+
+    for filename, default_value in DATA_FILES.items():
+        key = filename.removesuffix(".json")
+        ref = db.reference(key)
+        firebase_value = ref.get()
+        local_value = load_json(filename, default_value)
+
+        if firebase_value is None:
+            ref.set(local_value)
+            continue
+
+        path = data_path(filename)
+        with path.open("w", encoding="utf-8") as file:
+            json.dump(firebase_value, file, indent=4, ensure_ascii=False)
+
+
+def load_data(filename: str, default: Any) -> Any:
+    if firebase_enabled:
+        firebase_value = db.reference(filename.removesuffix(".json")).get()
+        if firebase_value is not None:
+            path = data_path(filename)
+            with path.open("w", encoding="utf-8") as file:
+                json.dump(firebase_value, file, indent=4, ensure_ascii=False)
+            return firebase_value
+    return load_json(filename, default)
+
+
+initialize_firebase()
+ensure_data_files()
+sync_local_json_to_firebase()
+
+links = load_data("links.json", {})
+teams = load_data("teams.json", {"teams": {}})
+config = load_data("config.json", {"rules": [], "max_team_members": 0})
 
 cooldowns: dict[str, float] = {}
 pending_codes: dict[str, dict[str, Any]] = {}

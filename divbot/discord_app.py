@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
@@ -21,10 +22,12 @@ from divbot.common import (
     pending_codes,
     remove_pending_codes_for_discord_user,
     register_team_update_callback,
+    save_json,
     save_config,
     save_links,
     save_teams,
     teams,
+    load_json,
     unlink_discord_user,
 )
 from divbot.team_logic import (
@@ -124,7 +127,8 @@ class DiscordBot(discord_commands.Bot):
     async def refresh_leaderboards_every_minute(self) -> None:
         while not self.is_closed():
             await refresh_registered_leaderboards()
-            await asyncio.sleep(60)
+            sleep_seconds = max(1.0, 60 - (time.time() % 60))
+            await asyncio.sleep(sleep_seconds)
 
 
 class LinkAccountView(discord.ui.View):
@@ -223,6 +227,9 @@ class LinkCodeView(discord.ui.View):
 
 discord_bot = DiscordBot()
 leaderboard_messages: dict[int, discord.Message] = {}
+LEADERBOARD_CHANNEL_ID = 1487174285368758354
+LEADERBOARD_STATE_FILE = "leaderboard.json"
+leaderboard_state: dict[str, dict[str, dict[str, object]]] = load_json(LEADERBOARD_STATE_FILE, {"channels": {}})
 TEAM_SWITCH_ALERT_CHANNEL_ID = 1487218240647205054
 DELINQUENT_ROLE_ID = 1487122699275862099
 TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
@@ -231,6 +238,11 @@ TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 
 team_switch_violations: dict[int, int] = {}
 team_spam_restore_tasks: dict[int, asyncio.Task[None]] = {}
 team_enforcement_locks: dict[int, asyncio.Lock] = {}
+
+if not isinstance(leaderboard_state, dict):
+    leaderboard_state = {"channels": {}}
+if "channels" not in leaderboard_state or not isinstance(leaderboard_state["channels"], dict):
+    leaderboard_state["channels"] = {}
 
 
 def get_team_enforcement_lock(member_id: int) -> asyncio.Lock:
@@ -275,17 +287,39 @@ async def restore_member_after_team_spam(guild_id: int, member_id: int, team_rol
 
 
 async def refresh_registered_leaderboards() -> None:
-    for message_id, message in list(leaderboard_messages.items()):
+    await ensure_leaderboard_channel_message(LEADERBOARD_CHANNEL_ID)
+
+    for channel_id_str, entry in list(leaderboard_state["channels"].items()):
+        channel_id = int(channel_id_str)
+        message_id = int(entry.get("message_id", 0))
+        if message_id <= 0:
+            continue
+
+        message = leaderboard_messages.get(message_id)
+        if message is None:
+            message = await fetch_leaderboard_message(channel_id, message_id)
+            if message is None:
+                clear_leaderboard_registration(channel_id)
+                continue
+            leaderboard_messages[message_id] = message
+
         guild = message.guild
         if guild is None:
+            clear_leaderboard_registration(channel_id)
             leaderboard_messages.pop(message_id, None)
             continue
+
         try:
             await message.edit(embed=leaderboard_embed(guild))
         except (discord.NotFound, discord.Forbidden):
+            clear_leaderboard_registration(channel_id)
             leaderboard_messages.pop(message_id, None)
+            continue
         except discord.HTTPException:
             continue
+
+        register_leaderboard_message(message)
+        update_leaderboard_last_refresh(channel_id)
 
 
 register_team_update_callback(refresh_registered_leaderboards)
@@ -293,6 +327,52 @@ register_team_update_callback(refresh_registered_leaderboards)
 
 def register_leaderboard_message(message: discord.Message) -> None:
     leaderboard_messages[message.id] = message
+    channel_id = message.channel.id
+    leaderboard_state["channels"][str(channel_id)] = {
+        "message_id": message.id,
+        "last_refresh_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    persist_leaderboard_state()
+
+
+def persist_leaderboard_state() -> None:
+    save_json(LEADERBOARD_STATE_FILE, leaderboard_state)
+
+
+def clear_leaderboard_registration(channel_id: int) -> None:
+    leaderboard_state["channels"].pop(str(channel_id), None)
+    persist_leaderboard_state()
+
+
+def update_leaderboard_last_refresh(channel_id: int) -> None:
+    entry = leaderboard_state["channels"].get(str(channel_id))
+    if entry is None:
+        return
+    entry["last_refresh_utc"] = datetime.now(timezone.utc).isoformat()
+    persist_leaderboard_state()
+
+
+async def fetch_leaderboard_message(channel_id: int, message_id: int) -> discord.Message | None:
+    channel = discord_bot.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return None
+    try:
+        return await channel.fetch_message(message_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+
+
+async def ensure_leaderboard_channel_message(channel_id: int) -> None:
+    entry = leaderboard_state["channels"].get(str(channel_id))
+    if entry is not None and int(entry.get("message_id", 0)) > 0:
+        return
+
+    channel = discord_bot.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    sent_message = await channel.send(embed=leaderboard_embed(channel.guild))
+    register_leaderboard_message(sent_message)
 
 
 async def handle_unlink_request(interaction: discord.Interaction) -> None:

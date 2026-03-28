@@ -101,23 +101,23 @@ class TwitchBot(twitch_commands.Bot):
             elif rule_type == "emote" and message.tags.get("emotes") and rule_value in msg:
                 await give_role(discord_id, rule_role)
 
-    @twitch_commands.command(name="duel")
-    async def duel_command(self, ctx: twitch_commands.Context, team_one: str, team_two: str, points: int) -> None:
+    @twitch_commands.command(name="match", aliases=["duel"])
+    async def duel_command(self, ctx: twitch_commands.Context, *team_names: str) -> None:
         if not is_twitch_admin(ctx.author):
-            await ctx.send("Seuls le streamer ou les modérateurs peuvent lancer un duel.")
+            await ctx.send("Seuls le streamer ou les modérateurs peuvent lancer un affrontement.")
             return
 
-        _, message, new_duel = start_duel(team_one, team_two, points, common.active_duel)
+        _, message, new_duel = start_duel(list(team_names), common.active_duel)
         common.active_duel = new_duel
         await ctx.send(message)
 
     @twitch_commands.command(name="win")
-    async def win_command(self, ctx: twitch_commands.Context, team_name: str) -> None:
+    async def win_command(self, ctx: twitch_commands.Context, team_name: str, points: int = 1) -> None:
         if not is_twitch_admin(ctx.author):
             await ctx.send("Seuls le streamer ou les modérateurs peuvent valider une victoire.")
             return
 
-        _, message, new_duel = resolve_duel(team_name, common.active_duel)
+        _, message, new_duel = resolve_duel(team_name, points, common.active_duel)
         common.active_duel = new_duel
         await ctx.send(message)
 

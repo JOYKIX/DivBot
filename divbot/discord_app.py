@@ -81,6 +81,13 @@ def is_discord_moderator(interaction: discord.Interaction) -> bool:
     )
 
 
+def has_required_role(interaction: discord.Interaction, role_id: int) -> bool:
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        return False
+    return any(role.id == role_id for role in member.roles)
+
+
 intents = discord.Intents.all()
 guild_object = discord.Object(id=GUILD_ID)
 link_group = app_commands.Group(name="link", description="Commandes de liaison Twitch ↔ Discord")
@@ -242,6 +249,7 @@ leaderboard_state: dict[str, dict[str, dict[str, object]]] = load_data(LEADERBOA
 TEAM_SWITCH_ALERT_CHANNEL_ID = 1487218240647205054
 DELINQUENT_ROLE_ID = 1487122699275862099
 TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
+TEAM_RESTRICTED_COMMAND_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
 TEAM_SPAM_PUNISHMENTS_KEY = "team_spam_punishments"
@@ -800,6 +808,7 @@ def team_role_ids_for_member(member: discord.Member) -> set[int]:
 
 
 @link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")
+@app_commands.check(lambda interaction: has_required_role(interaction, TEAM_RESTRICTED_COMMAND_ROLE_ID))
 async def link_remove(interaction: discord.Interaction) -> None:
     await handle_unlink_request(interaction)
 
@@ -1154,6 +1163,7 @@ async def team_list(interaction: discord.Interaction) -> None:
 
 @team_group.command(name="detail", description="Voir le détail d'une team et ses membres")
 @app_commands.describe(role="Rôle de la team (ex: @NomDeLaTeam)")
+@app_commands.check(lambda interaction: has_required_role(interaction, TEAM_RESTRICTED_COMMAND_ROLE_ID))
 async def team_detail(interaction: discord.Interaction, role: discord.Role) -> None:
     guild = interaction.guild
     if guild is None:
@@ -1239,8 +1249,10 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_captain.error
 @team_motto.error
 @link_panel.error
+@link_remove.error
 @rule_add.error
 @rule_remove.error
+@team_detail.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
         await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)

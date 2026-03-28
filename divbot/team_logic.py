@@ -246,7 +246,7 @@ def start_duel(team_names: list[str], active_duel: dict[str, Any] | None) -> tup
     teams_label = " VS ".join(f"**{team.title()}**" for team in unique_names)
     message = (
         f"Affrontement lancé : {teams_label}. "
-        "Utilise `!win <équipe> [points]` pour annoncer le gagnant."
+        "Utilise `!win <équipe|@utilisateur> [points]` pour annoncer le gagnant."
     )
     return True, message, new_duel
 

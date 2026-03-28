@@ -7,6 +7,7 @@ from twitchio.ext import commands as twitch_commands
 from divbot import common
 from divbot.common import (
     COOLDOWN,
+    GUILD_ID,
     TWITCH_CHANNEL,
     TWITCH_TOKEN,
     cleanup_expired_codes,
@@ -15,6 +16,7 @@ from divbot.common import (
     links,
     pending_codes,
     save_links,
+    teams,
     unlink_discord_user,
     unlink_twitch_user,
 )
@@ -107,19 +109,66 @@ class TwitchBot(twitch_commands.Bot):
             await ctx.send("Seuls le streamer ou les modérateurs peuvent lancer un affrontement.")
             return
 
-        _, message, new_duel = start_duel(list(team_names), common.active_duel)
+        selected_teams = list(team_names)
+        if not selected_teams:
+            selected_teams = list(teams["teams"].keys())
+
+        _, message, new_duel = start_duel(selected_teams, common.active_duel)
         common.active_duel = new_duel
         await ctx.send(message)
 
     @twitch_commands.command(name="win")
-    async def win_command(self, ctx: twitch_commands.Context, team_name: str, points: int = 1) -> None:
+    async def win_command(self, ctx: twitch_commands.Context, winner_reference: str, points: int = 1) -> None:
         if not is_twitch_admin(ctx.author):
             await ctx.send("Seuls le streamer ou les modérateurs peuvent valider une victoire.")
             return
 
-        _, message, new_duel = resolve_duel(team_name, points, common.active_duel)
+        winner_team_name = winner_reference
+        winner_label = winner_reference
+        if winner_reference.startswith("@"):
+            twitch_username = winner_reference[1:].strip().lower()
+            team_name = await self.resolve_team_name_for_twitch_user(twitch_username)
+            if team_name is None:
+                await ctx.send(
+                    "Impossible de trouver une équipe pour cet utilisateur. "
+                    "Le compte Twitch doit être lié à Discord et appartenir à une team."
+                )
+                return
+            winner_team_name = team_name
+            winner_label = winner_reference
+
+        success, message, new_duel = resolve_duel(winner_team_name, points, common.active_duel)
         common.active_duel = new_duel
+        if success and winner_reference.startswith("@"):
+            await ctx.send(f"Victoire de **{winner_label}** ! +**{points}** point(s) pour **{winner_team_name.title()}**.")
+            return
+
         await ctx.send(message)
+
+    async def resolve_team_name_for_twitch_user(self, twitch_username: str) -> str | None:
+        discord_id = links.get(twitch_username)
+        if discord_id is None:
+            return None
+
+        guild = discord_bot.get_guild(GUILD_ID)
+        if guild is None:
+            return None
+
+        member = guild.get_member(discord_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(discord_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return None
+
+        for team_name, team_data in teams["teams"].items():
+            role_id = team_data.get("role_id")
+            if not isinstance(role_id, int):
+                continue
+            if any(role.id == role_id for role in member.roles):
+                return team_name
+
+        return None
 
     async def delete_twitch_message(self, message) -> None:
         message_id = message.tags.get("id")

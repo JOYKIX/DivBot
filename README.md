@@ -53,8 +53,8 @@ Le code est maintenant séparé en modules simples :
 
 ### Commandes Twitch disponibles
 - `!link <CODE>`
-- `!duel <équipe1> <équipe2> <points>`
-- `!win <équipe>`
+- `!match <équipe1> <équipe2> [équipe3 ...]` (alias: `!duel`)
+- `!win <équipe_gagnante> [points]`
 
 ## Installation
 

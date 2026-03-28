@@ -225,59 +225,58 @@ def team_detail_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed
     return embed
 
 
-def start_duel(team_one_name: str, team_two_name: str, points: int, active_duel: dict[str, Any] | None) -> tuple[bool, str, dict[str, Any] | None]:
-    if points <= 0:
-        return False, "Le nombre de points doit être supérieur à zéro.", active_duel
-
+def start_duel(team_names: list[str], active_duel: dict[str, Any] | None) -> tuple[bool, str, dict[str, Any] | None]:
     if active_duel is not None:
-        return False, "Un duel est déjà en cours. Termine-le avec `!win <équipe>` avant d'en lancer un autre.", active_duel
+        return False, "Un affrontement est déjà en cours. Termine-le avec `!win <équipe> [points]` avant d'en lancer un autre.", active_duel
 
-    team_one = get_team_entry_by_name(team_one_name)
-    team_two = get_team_entry_by_name(team_two_name)
+    normalized_names = [name.strip().lower() for name in team_names if name.strip()]
+    if len(normalized_names) < 2:
+        return False, "Tu dois indiquer au moins deux équipes.", active_duel
 
-    if team_one is None or team_two is None:
-        return False, "Une des équipes indiquées n'existe pas.", active_duel
+    unique_names = list(dict.fromkeys(normalized_names))
+    if len(unique_names) < 2:
+        return False, "Tu dois choisir au moins deux équipes différentes.", active_duel
 
-    if team_one[0] == team_two[0]:
-        return False, "Tu dois choisir deux équipes différentes.", active_duel
+    missing_teams = [name for name in unique_names if get_team_entry_by_name(name) is None]
+    if missing_teams:
+        missing_label = ", ".join(f"**{name}**" for name in missing_teams)
+        return False, f"Ces équipes n'existent pas : {missing_label}.", active_duel
 
-    new_duel = {
-        "team_one": team_one[0],
-        "team_two": team_two[0],
-        "points": points,
-    }
+    new_duel = {"teams": unique_names}
+    teams_label = " VS ".join(f"**{team.title()}**" for team in unique_names)
     message = (
-        f"Duel lancé : **{team_one_name}** VS **{team_two_name}** pour **{points}** point(s). "
-        "Utilise `!win <équipe>` pour annoncer le gagnant."
+        f"Affrontement lancé : {teams_label}. "
+        "Utilise `!win <équipe> [points]` pour annoncer le gagnant."
     )
     return True, message, new_duel
 
 
-def resolve_duel(winner_name: str, active_duel: dict[str, Any] | None) -> tuple[bool, str, dict[str, Any] | None]:
+def resolve_duel(winner_name: str, points: int, active_duel: dict[str, Any] | None) -> tuple[bool, str, dict[str, Any] | None]:
     if active_duel is None:
-        return False, "Aucun duel n'est en cours.", active_duel
+        return False, "Aucun affrontement n'est en cours.", active_duel
+
+    if points <= 0:
+        return False, "Le nombre de points doit être supérieur à zéro.", active_duel
 
     winner = get_team_entry_by_name(winner_name)
     if winner is None:
         return False, "Cette équipe n'existe pas.", active_duel
 
-    duel_teams = {active_duel["team_one"], active_duel["team_two"]}
+    duel_teams = set(active_duel.get("teams", []))
     if winner[0] not in duel_teams:
-        return False, "L'équipe gagnante doit faire partie du duel en cours.", active_duel
+        return False, "L'équipe gagnante doit faire partie de l'affrontement en cours.", active_duel
 
-    loser_key = next(team_name for team_name in duel_teams if team_name != winner[0])
-    loser_data = teams["teams"][loser_key]
-    duel_points = active_duel["points"]
-
-    winner[1]["points"] += duel_points
+    winner[1]["points"] += points
     winner[1]["wins"] += 1
-    loser_data["losses"] += 1
+    losers = [team_name for team_name in duel_teams if team_name != winner[0]]
+    for loser_key in losers:
+        teams["teams"][loser_key]["losses"] += 1
     save_teams()
 
     winner_display = winner[0].title()
-    loser_display = loser_key.title()
+    loser_display = ", ".join(team_name.title() for team_name in losers)
     return True, (
-        f"Victoire de **{winner_display}** ! +**{duel_points}** point(s). "
+        f"Victoire de **{winner_display}** ! +**{points}** point(s). "
         f"Défaite enregistrée pour **{loser_display}**."
     ), None
 

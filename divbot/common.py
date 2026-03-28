@@ -42,6 +42,7 @@ DATA_FILES: dict[str, Any] = {
     "links.json": {},
     "teams.json": {"teams": {}},
     "config.json": {"rules": [], "max_team_members": 0},
+    "leaderboard.json": {"channels": {}},
 }
 
 

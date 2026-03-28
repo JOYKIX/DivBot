@@ -239,11 +239,11 @@ def start_duel(team_names: list[str], active_duel: dict[str, Any] | None) -> tup
 
     missing_teams = [name for name in unique_names if get_team_entry_by_name(name) is None]
     if missing_teams:
-        missing_label = ", ".join(f"**{name}**" for name in missing_teams)
+        missing_label = ", ".join(name for name in missing_teams)
         return False, f"Ces équipes n'existent pas : {missing_label}.", active_duel
 
     new_duel = {"teams": unique_names}
-    teams_label = " VS ".join(f"**{team.title()}**" for team in unique_names)
+    teams_label = " VS ".join(team.title() for team in unique_names)
     message = (
         f"Affrontement lancé : {teams_label}. "
         "Utilise `!win <équipe|@utilisateur> [points]` pour annoncer le gagnant."
@@ -276,8 +276,8 @@ def resolve_duel(winner_name: str, points: int, active_duel: dict[str, Any] | No
     winner_display = winner[0].title()
     loser_display = ", ".join(team_name.title() for team_name in losers)
     return True, (
-        f"Victoire de **{winner_display}** ! +**{points}** point(s). "
-        f"Défaite enregistrée pour **{loser_display}**."
+        f"Victoire de {winner_display} ! +{points} point(s). "
+        f"Défaite enregistrée pour {loser_display}."
     ), None
 
 

@@ -140,7 +140,7 @@ class TwitchBot(twitch_commands.Bot):
         success, message, new_duel = resolve_duel(winner_team_name, points, common.active_duel)
         common.active_duel = new_duel
         if success and winner_reference.startswith("@"):
-            await ctx.send(f"Victoire de **{winner_label}** ! +**{points}** point(s) pour **{winner_team_name.title()}**.")
+            await ctx.send(f"Victoire de {winner_label} ! +{points} point(s) pour {winner_team_name.title()}.")
             return
 
         await ctx.send(message)

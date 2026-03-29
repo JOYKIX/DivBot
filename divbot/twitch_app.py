@@ -115,7 +115,12 @@ class TwitchBot(twitch_commands.Bot):
             if not isinstance(rule, dict):
                 continue
 
-            if str(rule.get("type", "")).strip().lower() != "emote":
+            action = str(rule.get("action", "give_role")).strip().lower()
+            if action != "give_role":
+                continue
+
+            rule_type = str(rule.get("type", "")).strip().lower()
+            if rule_type not in {"emote", "contains"}:
                 continue
 
             emote = str(rule.get("value", "")).strip()
@@ -212,7 +217,7 @@ class TwitchBot(twitch_commands.Bot):
         emote_rules = self.get_matchspam_emote_rules()
         if not emote_rules:
             await ctx.send(
-                "Aucune règle `emote` liée à une team n'est configurée. "
+                "Aucune règle de déclencheur (`emote` ou `contains`) liée à une team n'est configurée. "
                 "Ajoute des règles avec `/rule add` pour les emotes de team."
             )
             return

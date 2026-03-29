@@ -250,6 +250,10 @@ TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
 TEAM_SPAM_PUNISHMENTS_KEY = "team_spam_punishments"
+TEAM_LOSER_GIF_URL = (
+    "https://images-ext-1.discordapp.net/external/cI99ZlfVSbLPDvtcgFqTwFsh8bhTvZ48DmL22Ha1xKI/"
+    "https/media.tenor.com/1fpEjOn5W3QAAAPo/loser.mp4"
+)
 team_switch_violations: dict[int, int] = {}
 team_enforcement_locks: dict[int, asyncio.Lock] = {}
 team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_data(
@@ -833,6 +837,46 @@ def get_team_channel_for_role(guild: discord.Guild, role: discord.Role) -> disco
     return None
 
 
+def get_team_channel_by_name(guild: discord.Guild, team_name: str) -> discord.TextChannel | None:
+    team_data = teams.get("teams", {}).get(team_name.lower())
+    if not isinstance(team_data, dict):
+        return None
+    role_id = team_data.get("role_id")
+    if not isinstance(role_id, int):
+        return None
+    team_role = guild.get_role(role_id)
+    if team_role is None:
+        return None
+    return get_team_channel_for_role(guild, team_role)
+
+
+async def announce_team_points(team_name: str, points: int, *, reason: str | None = None) -> None:
+    guild = discord_bot.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    team_channel = get_team_channel_by_name(guild, team_name)
+    if team_channel is None:
+        return
+    reason_suffix = f" ({reason})" if reason else ""
+    try:
+        await team_channel.send(f"🏆 Vous gagnez **{points}** point(s){reason_suffix} !")
+    except discord.HTTPException:
+        return
+
+
+async def announce_team_loss(team_name: str) -> None:
+    guild = discord_bot.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    team_channel = get_team_channel_by_name(guild, team_name)
+    if team_channel is None:
+        return
+    try:
+        await team_channel.send(TEAM_LOSER_GIF_URL)
+    except discord.HTTPException:
+        return
+
+
 async def announce_team_joins(before: discord.Member, current_member: discord.Member) -> None:
     before_team_role_ids = team_role_ids_for_member(before)
     joined_team_roles = [
@@ -1071,6 +1115,8 @@ async def team_points(interaction: discord.Interaction, role: discord.Role, amou
 
     teams["teams"][name]["points"] += amount
     save_teams()
+    if amount > 0:
+        await announce_team_points(name, amount, reason="ajout de points")
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
 
@@ -1112,16 +1158,25 @@ async def team_record(
 
     team_data = teams["teams"][name]
     updates: list[str] = []
+    win_delta = 0
+    loss_delta = 0
 
     if wins is not None:
+        win_delta = wins - int(team_data.get("wins", 0))
         team_data["wins"] = wins
         updates.append(f"Victoires → **{wins}**")
 
     if losses is not None:
+        loss_delta = losses - int(team_data.get("losses", 0))
         team_data["losses"] = losses
         updates.append(f"Défaites → **{losses}**")
 
     save_teams()
+    if win_delta > 0:
+        await announce_team_points(name, win_delta, reason="victoire")
+    if loss_delta > 0:
+        for _ in range(loss_delta):
+            await announce_team_loss(name)
     await send_interaction_embed(
         interaction,
         "Bilan mis à jour",

@@ -257,6 +257,7 @@ team_enforcement_locks: dict[int, asyncio.Lock] = {}
 team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_data(
     TEAM_SPAM_PUNISHMENTS_KEY, {"members": {}}
 )
+team_record_snapshot: dict[str, dict[str, int]] = {}
 
 if not isinstance(leaderboard_state, dict):
     leaderboard_state = {"channels": {}}
@@ -869,6 +870,46 @@ async def announce_team_points(team_name: str, points: int, *, reason: str | Non
         return
 
 
+def snapshot_team_record_state() -> dict[str, dict[str, int]]:
+    state: dict[str, dict[str, int]] = {}
+    for team_name, team_data in teams.get("teams", {}).items():
+        if not isinstance(team_data, dict):
+            continue
+        try:
+            wins = int(team_data.get("wins", 0))
+        except (TypeError, ValueError):
+            wins = 0
+        try:
+            losses = int(team_data.get("losses", 0))
+        except (TypeError, ValueError):
+            losses = 0
+        state[team_name] = {"wins": max(0, wins), "losses": max(0, losses)}
+    return state
+
+
+async def announce_team_victory(team_name: str, victories: int = 1) -> None:
+    if victories <= 0:
+        return
+    guild = discord_bot.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    team_channel = get_team_channel_by_name(guild, team_name)
+    if team_channel is None:
+        return
+    team_data = teams.get("teams", {}).get(team_name)
+    team_role = None
+    if isinstance(team_data, dict):
+        role_id = team_data.get("role_id")
+        if isinstance(role_id, int):
+            team_role = guild.get_role(role_id)
+    team_mention = team_role.mention if team_role is not None else team_name.title()
+    suffix = "s" if victories > 1 else ""
+    try:
+        await team_channel.send(f"🏆 {team_mention} valide **{victories}** victoire{suffix} !")
+    except discord.HTTPException:
+        return
+
+
 def get_loser_gif_urls() -> list[str]:
     raw_urls = config.get("loser_gif_urls", [])
     if not isinstance(raw_urls, list):
@@ -877,7 +918,9 @@ def get_loser_gif_urls() -> list[str]:
     return [url for url in cleaned_urls if url.startswith(("http://", "https://"))]
 
 
-async def announce_team_loss(team_name: str) -> None:
+async def announce_team_loss(team_name: str, defeats: int = 1) -> None:
+    if defeats <= 0:
+        return
     guild = discord_bot.get_guild(GUILD_ID)
     if guild is None:
         return
@@ -889,9 +932,36 @@ async def announce_team_loss(team_name: str) -> None:
         return
     loser_gif_url = random.choice(loser_gif_urls)
     try:
-        await team_channel.send(f"💥 Défaite… courage, on revient plus forts !\n{loser_gif_url}")
+        await team_channel.send(
+            f"💥 Défaite enregistrée (**{defeats}** au total) … courage, on revient plus forts !\n{loser_gif_url}"
+            if defeats > 1
+            else f"💥 Défaite… courage, on revient plus forts !\n{loser_gif_url}"
+        )
     except discord.HTTPException:
         return
+
+
+async def announce_team_record_changes() -> None:
+    global team_record_snapshot
+    current_snapshot = snapshot_team_record_state()
+    previous_snapshot = team_record_snapshot
+    team_record_snapshot = current_snapshot
+
+    all_team_names = set(previous_snapshot) | set(current_snapshot)
+    for team_name in sorted(all_team_names):
+        current_entry = current_snapshot.get(team_name, {"wins": 0, "losses": 0})
+        previous_entry = previous_snapshot.get(team_name, {"wins": 0, "losses": 0})
+        win_delta = current_entry["wins"] - previous_entry["wins"]
+        loss_delta = current_entry["losses"] - previous_entry["losses"]
+
+        if win_delta > 0:
+            await announce_team_victory(team_name, win_delta)
+        if loss_delta > 0:
+            await announce_team_loss(team_name, loss_delta)
+
+
+team_record_snapshot = snapshot_team_record_state()
+register_team_update_callback(announce_team_record_changes)
 
 
 async def announce_team_joins(before: discord.Member, current_member: discord.Member) -> None:
@@ -1291,25 +1361,15 @@ async def team_record(
 
     team_data = teams["teams"][name]
     updates: list[str] = []
-    win_delta = 0
-    loss_delta = 0
-
     if wins is not None:
-        win_delta = wins - int(team_data.get("wins", 0))
         team_data["wins"] = wins
         updates.append(f"Victoires → **{wins}**")
 
     if losses is not None:
-        loss_delta = losses - int(team_data.get("losses", 0))
         team_data["losses"] = losses
         updates.append(f"Défaites → **{losses}**")
 
     save_teams()
-    if win_delta > 0:
-        await announce_team_points(name, win_delta, reason="victoire")
-    if loss_delta > 0:
-        for _ in range(loss_delta):
-            await announce_team_loss(name)
     await send_interaction_embed(
         interaction,
         "Bilan mis à jour",

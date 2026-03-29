@@ -23,7 +23,7 @@ from divbot.common import (
     unlink_discord_user,
     unlink_twitch_user,
 )
-from divbot.discord_app import announce_team_loss, announce_team_points, discord_bot, give_role
+from divbot.discord_app import announce_team_points, discord_bot, give_role
 from divbot.team_logic import build_embed, resolve_duel, start_duel
 
 
@@ -274,16 +274,8 @@ class TwitchBot(twitch_commands.Bot):
             winner_team_name = team_name
             winner_label = winner_reference
 
-        previous_duel = common.active_duel
-        success, message, new_duel = resolve_duel(winner_team_name, points, previous_duel)
+        success, message, new_duel = resolve_duel(winner_team_name, points, common.active_duel)
         common.active_duel = new_duel
-        if success:
-            normalized_winner_name = winner_team_name.strip().lower()
-            await announce_team_points(normalized_winner_name, points, reason="victoire")
-            duel_teams = set(previous_duel.get("teams", [])) if previous_duel is not None else set()
-            for team_name in duel_teams:
-                if team_name != normalized_winner_name:
-                    await announce_team_loss(team_name)
         if success and winner_reference.startswith("@"):
             await ctx.send(f"Victoire de {winner_label} ! +{points} point(s) pour {winner_team_name.title()}.")
             return

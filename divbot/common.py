@@ -43,7 +43,7 @@ INFO_COLOR = discord.Color.gold()
 DATA_DEFAULTS: dict[str, Any] = {
     "links": {},
     "teams": {"teams": {}},
-    "config": {"rules": [], "max_team_members": 0},
+    "config": {"rules": [], "max_team_members": 0, "loser_gif_url": ""},
     "leaderboard": {"channels": {}},
     "team_spam_punishments": {"members": {}},
 }
@@ -192,6 +192,13 @@ def normalize_config_data() -> None:
 
     if config["max_team_members"] < 0:
         config["max_team_members"] = 0
+        changed = True
+
+    if "loser_gif_url" not in config:
+        config["loser_gif_url"] = ""
+        changed = True
+    elif not isinstance(config["loser_gif_url"], str):
+        config["loser_gif_url"] = str(config["loser_gif_url"])
         changed = True
 
     if changed:

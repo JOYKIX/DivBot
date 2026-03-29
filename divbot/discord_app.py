@@ -250,10 +250,6 @@ TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
 TEAM_SPAM_PUNISHMENTS_KEY = "team_spam_punishments"
-TEAM_LOSER_GIF_URL = (
-    "https://images-ext-1.discordapp.net/external/cI99ZlfVSbLPDvtcgFqTwFsh8bhTvZ48DmL22Ha1xKI/"
-    "https/media.tenor.com/1fpEjOn5W3QAAAPo/loser.mp4"
-)
 team_switch_violations: dict[int, int] = {}
 team_enforcement_locks: dict[int, asyncio.Lock] = {}
 team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_data(
@@ -871,8 +867,11 @@ async def announce_team_loss(team_name: str) -> None:
     team_channel = get_team_channel_by_name(guild, team_name)
     if team_channel is None:
         return
+    loser_gif_url = str(config.get("loser_gif_url", "")).strip()
+    if not loser_gif_url:
+        return
     try:
-        await team_channel.send(TEAM_LOSER_GIF_URL)
+        await team_channel.send(loser_gif_url)
     except discord.HTTPException:
         return
 
@@ -1100,6 +1099,41 @@ async def team_motto(interaction: discord.Interaction, role: discord.Role, motto
         interaction,
         "Devise mise à jour",
         f"**{role.name}** → *{motto_display}*",
+        SUCCESS_COLOR,
+    )
+
+
+@team_group.command(name="loser", description="Définir le GIF envoyé aux équipes perdantes")
+@app_commands.describe(gif_url="Lien du GIF (Tenor/Discord/CDN). Laisse vide pour désactiver")
+@app_commands.check(is_discord_moderator)
+async def team_loser(interaction: discord.Interaction, gif_url: str) -> None:
+    cleaned_url = gif_url.strip()
+    if not cleaned_url:
+        await send_interaction_embed(
+            interaction,
+            "Lien invalide",
+            "Le lien du GIF ne peut pas être vide.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    if not cleaned_url.startswith(("http://", "https://")):
+        await send_interaction_embed(
+            interaction,
+            "Lien invalide",
+            "Le lien doit commencer par `http://` ou `https://`.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    config["loser_gif_url"] = cleaned_url
+    save_config()
+    await send_interaction_embed(
+        interaction,
+        "GIF des perdants mis à jour",
+        f"Le GIF des défaites est maintenant : {cleaned_url}",
         SUCCESS_COLOR,
     )
 

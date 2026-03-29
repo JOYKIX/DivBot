@@ -255,8 +255,8 @@ def resolve_duel(winner_name: str, points: int, active_duel: dict[str, Any] | No
     if active_duel is None:
         return False, "Aucun affrontement n'est en cours.", active_duel
 
-    if points <= 0:
-        return False, "Le nombre de points doit être supérieur à zéro.", active_duel
+    if points < 0:
+        return False, "Le nombre de points ne peut pas être négatif.", active_duel
 
     winner = get_team_entry_by_name(winner_name)
     if winner is None:
@@ -267,14 +267,23 @@ def resolve_duel(winner_name: str, points: int, active_duel: dict[str, Any] | No
         return False, "L'équipe gagnante doit faire partie de l'affrontement en cours.", active_duel
 
     winner[1]["points"] += points
-    winner[1]["wins"] += 1
     losers = [team_name for team_name in duel_teams if team_name != winner[0]]
+
+    winner_display = winner[0].title()
+    loser_display = ", ".join(team_name.title() for team_name in losers)
+
+    if points == 0:
+        save_teams()
+        return True, (
+            f"Match de test validé pour {winner_display} (0 point). "
+            "Aucune victoire ou défaite n'a été enregistrée."
+        ), None
+
+    winner[1]["wins"] += 1
     for loser_key in losers:
         teams["teams"][loser_key]["losses"] += 1
     save_teams()
 
-    winner_display = winner[0].title()
-    loser_display = ", ".join(team_name.title() for team_name in losers)
     return True, (
         f"Victoire de {winner_display} ! +{points} point(s). "
         f"Défaite enregistrée pour {loser_display}."

@@ -1,6 +1,8 @@
 import asyncio
+import random
 import time
 from datetime import datetime, timezone
+from typing import Literal
 
 import discord
 from discord import app_commands
@@ -853,11 +855,26 @@ async def announce_team_points(team_name: str, points: int, *, reason: str | Non
     team_channel = get_team_channel_by_name(guild, team_name)
     if team_channel is None:
         return
+    team_data = teams.get("teams", {}).get(team_name)
+    team_role = None
+    if isinstance(team_data, dict):
+        role_id = team_data.get("role_id")
+        if isinstance(role_id, int):
+            team_role = guild.get_role(role_id)
     reason_suffix = f" ({reason})" if reason else ""
+    team_mention = team_role.mention if team_role is not None else team_name.title()
     try:
-        await team_channel.send(f"🏆 Vous gagnez **{points}** point(s){reason_suffix} !")
+        await team_channel.send(f"🏆 {team_mention} gagne **{points}** point(s){reason_suffix} !")
     except discord.HTTPException:
         return
+
+
+def get_loser_gif_urls() -> list[str]:
+    raw_urls = config.get("loser_gif_urls", [])
+    if not isinstance(raw_urls, list):
+        return []
+    cleaned_urls = [str(url).strip() for url in raw_urls]
+    return [url for url in cleaned_urls if url.startswith(("http://", "https://"))]
 
 
 async def announce_team_loss(team_name: str) -> None:
@@ -867,11 +884,12 @@ async def announce_team_loss(team_name: str) -> None:
     team_channel = get_team_channel_by_name(guild, team_name)
     if team_channel is None:
         return
-    loser_gif_url = str(config.get("loser_gif_url", "")).strip()
-    if not loser_gif_url:
+    loser_gif_urls = get_loser_gif_urls()
+    if not loser_gif_urls:
         return
+    loser_gif_url = random.choice(loser_gif_urls)
     try:
-        await team_channel.send(loser_gif_url)
+        await team_channel.send(f"💥 Défaite… courage, on revient plus forts !\n{loser_gif_url}")
     except discord.HTTPException:
         return
 
@@ -1103,16 +1121,56 @@ async def team_motto(interaction: discord.Interaction, role: discord.Role, motto
     )
 
 
-@team_group.command(name="loser", description="Définir le GIF envoyé aux équipes perdantes")
-@app_commands.describe(gif_url="Lien du GIF (Tenor/Discord/CDN). Laisse vide pour désactiver")
+@team_group.command(name="loser", description="Gérer les GIFs envoyés aux équipes perdantes")
+@app_commands.describe(
+    action="Action à effectuer (add/remove/list/clear)",
+    gif_url="Lien du GIF (requis pour add/remove)",
+)
 @app_commands.check(is_discord_moderator)
-async def team_loser(interaction: discord.Interaction, gif_url: str) -> None:
-    cleaned_url = gif_url.strip()
+async def team_loser(
+    interaction: discord.Interaction,
+    action: Literal["add", "remove", "list", "clear"] = "add",
+    gif_url: str | None = None,
+) -> None:
+    current_urls = get_loser_gif_urls()
+
+    if action == "list":
+        if not current_urls:
+            await send_interaction_embed(
+                interaction,
+                "GIFs des perdants",
+                "Aucun GIF configuré. Ajoute-en avec `/team loser add <url>`.",
+                INFO_COLOR,
+                ephemeral=True,
+            )
+            return
+        urls_preview = "\n".join(f"`{index + 1}.` {url}" for index, url in enumerate(current_urls))
+        await send_interaction_embed(
+            interaction,
+            "GIFs des perdants",
+            urls_preview,
+            INFO_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    if action == "clear":
+        config["loser_gif_urls"] = []
+        save_config()
+        await send_interaction_embed(
+            interaction,
+            "GIFs supprimés",
+            "Tous les GIFs des équipes perdantes ont été supprimés.",
+            SUCCESS_COLOR,
+        )
+        return
+
+    cleaned_url = str(gif_url or "").strip()
     if not cleaned_url:
         await send_interaction_embed(
             interaction,
             "Lien invalide",
-            "Le lien du GIF ne peut pas être vide.",
+            "Tu dois fournir une URL de GIF pour cette action.",
             ERROR_COLOR,
             ephemeral=True,
         )
@@ -1128,13 +1186,54 @@ async def team_loser(interaction: discord.Interaction, gif_url: str) -> None:
         )
         return
 
-    config["loser_gif_url"] = cleaned_url
-    save_config()
+    if action == "add":
+        if cleaned_url in current_urls:
+            await send_interaction_embed(
+                interaction,
+                "Déjà présent",
+                "Ce GIF est déjà dans la liste.",
+                WARNING_COLOR,
+                ephemeral=True,
+            )
+            return
+        current_urls.append(cleaned_url)
+        config["loser_gif_urls"] = current_urls
+        save_config()
+        await send_interaction_embed(
+            interaction,
+            "GIF ajouté",
+            f"Le GIF a été ajouté. Total actuel : **{len(current_urls)}**.",
+            SUCCESS_COLOR,
+        )
+        return
+
+    if action == "remove":
+        if cleaned_url not in current_urls:
+            await send_interaction_embed(
+                interaction,
+                "GIF introuvable",
+                "Ce GIF n'existe pas dans la liste actuelle.",
+                ERROR_COLOR,
+                ephemeral=True,
+            )
+            return
+        updated_urls = [url for url in current_urls if url != cleaned_url]
+        config["loser_gif_urls"] = updated_urls
+        save_config()
+        await send_interaction_embed(
+            interaction,
+            "GIF supprimé",
+            f"GIF retiré. Total actuel : **{len(updated_urls)}**.",
+            SUCCESS_COLOR,
+        )
+        return
+
     await send_interaction_embed(
         interaction,
-        "GIF des perdants mis à jour",
-        f"Le GIF des défaites est maintenant : {cleaned_url}",
-        SUCCESS_COLOR,
+        "Action inconnue",
+        "Action non supportée.",
+        ERROR_COLOR,
+        ephemeral=True,
     )
 
 

@@ -207,8 +207,8 @@ class TwitchBot(twitch_commands.Bot):
             await ctx.send("La durée doit être supérieure à 0 seconde.")
             return
 
-        if points <= 0:
-            await ctx.send("Le nombre de points doit être supérieur à 0.")
+        if points < 0:
+            await ctx.send("Le nombre de points ne peut pas être négatif.")
             return
 
         if self.active_matchspam is not None:
@@ -277,7 +277,13 @@ class TwitchBot(twitch_commands.Bot):
         success, message, new_duel = resolve_duel(winner_team_name, points, common.active_duel)
         common.active_duel = new_duel
         if success and winner_reference.startswith("@"):
-            await ctx.send(f"Victoire de {winner_label} ! +{points} point(s) pour {winner_team_name.title()}.")
+            if points == 0:
+                await ctx.send(
+                    f"Match de test validé pour {winner_label} (0 point) : "
+                    "aucune victoire ou défaite enregistrée."
+                )
+            else:
+                await ctx.send(f"Victoire de {winner_label} ! +{points} point(s) pour {winner_team_name.title()}.")
             return
 
         await ctx.send(message)

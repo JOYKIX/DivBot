@@ -43,7 +43,7 @@ INFO_COLOR = discord.Color.gold()
 DATA_DEFAULTS: dict[str, Any] = {
     "links": {},
     "teams": {"teams": {}},
-    "config": {"rules": [], "max_team_members": 0, "loser_gif_url": ""},
+    "config": {"rules": [], "max_team_members": 0, "loser_gif_urls": []},
     "leaderboard": {"channels": {}},
     "team_spam_punishments": {"members": {}},
 }
@@ -194,11 +194,29 @@ def normalize_config_data() -> None:
         config["max_team_members"] = 0
         changed = True
 
-    if "loser_gif_url" not in config:
-        config["loser_gif_url"] = ""
+    raw_loser_gif_urls = config.get("loser_gif_urls", [])
+    normalized_loser_gif_urls: list[str] = []
+    if isinstance(raw_loser_gif_urls, list):
+        for item in raw_loser_gif_urls:
+            cleaned_item = str(item).strip()
+            if cleaned_item and cleaned_item.startswith(("http://", "https://")):
+                normalized_loser_gif_urls.append(cleaned_item)
+    elif isinstance(raw_loser_gif_urls, str):
+        cleaned_item = raw_loser_gif_urls.strip()
+        if cleaned_item and cleaned_item.startswith(("http://", "https://")):
+            normalized_loser_gif_urls.append(cleaned_item)
+
+    legacy_loser_gif_url = str(config.get("loser_gif_url", "")).strip()
+    if legacy_loser_gif_url and legacy_loser_gif_url.startswith(("http://", "https://")):
+        normalized_loser_gif_urls.append(legacy_loser_gif_url)
+
+    deduplicated_loser_gif_urls: list[str] = list(dict.fromkeys(normalized_loser_gif_urls))
+    if config.get("loser_gif_urls") != deduplicated_loser_gif_urls:
+        config["loser_gif_urls"] = deduplicated_loser_gif_urls
         changed = True
-    elif not isinstance(config["loser_gif_url"], str):
-        config["loser_gif_url"] = str(config["loser_gif_url"])
+
+    if "loser_gif_url" in config:
+        del config["loser_gif_url"]
         changed = True
 
     if changed:

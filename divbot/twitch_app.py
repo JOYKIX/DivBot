@@ -1,4 +1,6 @@
+import asyncio
 import time
+from collections import defaultdict
 from typing import Any
 
 import discord
@@ -16,6 +18,7 @@ from divbot.common import (
     links,
     pending_codes,
     save_links,
+    save_teams,
     teams,
     unlink_discord_user,
     unlink_twitch_user,
@@ -39,6 +42,7 @@ class TwitchBot(twitch_commands.Bot):
             prefix="!",
             initial_channels=[TWITCH_CHANNEL],
         )
+        self.active_matchspam: dict[str, Any] | None = None
 
     async def event_ready(self) -> None:
         print(f"[TWITCH] Connecté : {self.nick}")
@@ -52,6 +56,8 @@ class TwitchBot(twitch_commands.Bot):
 
         username = message.author.name.lower()
         msg = message.content
+
+        await self.track_matchspam_message(msg)
 
         if msg.lower().startswith("!link"):
             cleanup_expired_codes()
@@ -102,6 +108,131 @@ class TwitchBot(twitch_commands.Bot):
                 await give_role(discord_id, rule_role)
             elif rule_type == "emote" and message.tags.get("emotes") and rule_value in msg:
                 await give_role(discord_id, rule_role)
+
+    def get_matchspam_emote_rules(self) -> list[tuple[str, str]]:
+        emote_to_team: dict[str, str] = {}
+        for rule in config.get("rules", []):
+            if not isinstance(rule, dict):
+                continue
+
+            if str(rule.get("type", "")).strip().lower() != "emote":
+                continue
+
+            emote = str(rule.get("value", "")).strip()
+            role_name = str(rule.get("role", "")).strip().lower()
+            if not emote or role_name not in teams["teams"]:
+                continue
+
+            emote_to_team[emote] = role_name
+
+        return [(emote, team_name) for emote, team_name in emote_to_team.items()]
+
+    async def track_matchspam_message(self, message_content: str) -> None:
+        if self.active_matchspam is None:
+            return
+
+        tokens = message_content.split()
+        if not tokens:
+            return
+
+        emote_rules = self.active_matchspam.get("emote_rules", [])
+        if not emote_rules:
+            return
+
+        counts: dict[str, int] = self.active_matchspam["counts"]
+        for token in tokens:
+            for emote, team_name in emote_rules:
+                if token == emote:
+                    counts[team_name] += 1
+
+    async def finish_matchspam(self, channel) -> None:
+        if self.active_matchspam is None:
+            return
+
+        matchspam = self.active_matchspam
+        self.active_matchspam = None
+
+        counts: dict[str, int] = matchspam["counts"]
+        points: int = matchspam["points"]
+        ranking = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+
+        if not ranking:
+            await channel.send("⏱️ MatchSpam terminé, mais aucune team valide n'a été détectée via les règles emote.")
+            return
+
+        lines = [f"• {team_name.title()} : {score} emote(s)" for team_name, score in ranking]
+        best_score = ranking[0][1]
+
+        if best_score <= 0:
+            await channel.send(
+                "⏱️ MatchSpam terminé !\n"
+                + "\n".join(lines)
+                + "\nAucune emote n'a été envoyée, aucun point attribué."
+            )
+            return
+
+        winners = [team_name for team_name, score in ranking if score == best_score]
+        if len(winners) > 1:
+            winners_label = ", ".join(winner.title() for winner in winners)
+            await channel.send(
+                "⏱️ MatchSpam terminé !\n"
+                + "\n".join(lines)
+                + f"\nÉgalité entre {winners_label} ({best_score} emote(s)), aucun point attribué."
+            )
+            return
+
+        winner_team_name = winners[0]
+        teams["teams"][winner_team_name]["points"] += points
+        save_teams()
+
+        await channel.send(
+            "⏱️ MatchSpam terminé !\n"
+            + "\n".join(lines)
+            + f"\n🏆 {winner_team_name.title()} gagne +{points} point(s) avec {best_score} emote(s) !"
+        )
+
+    @twitch_commands.command(name="matchspam")
+    async def matchspam_command(self, ctx: twitch_commands.Context, duration_seconds: int, points: int) -> None:
+        if not is_twitch_admin(ctx.author):
+            await ctx.send("Seuls le streamer ou les modérateurs peuvent lancer un MatchSpam.")
+            return
+
+        if duration_seconds <= 0:
+            await ctx.send("La durée doit être supérieure à 0 seconde.")
+            return
+
+        if points <= 0:
+            await ctx.send("Le nombre de points doit être supérieur à 0.")
+            return
+
+        if self.active_matchspam is not None:
+            await ctx.send("Un MatchSpam est déjà en cours.")
+            return
+
+        emote_rules = self.get_matchspam_emote_rules()
+        if not emote_rules:
+            await ctx.send(
+                "Aucune règle `emote` liée à une team n'est configurée. "
+                "Ajoute des règles avec `/rule add` pour les emotes de team."
+            )
+            return
+
+        counts: defaultdict[str, int] = defaultdict(int)
+        for _, team_name in emote_rules:
+            counts[team_name] = 0
+
+        self.active_matchspam = {
+            "points": points,
+            "counts": counts,
+            "emote_rules": emote_rules,
+        }
+
+        await ctx.send(
+            f"🔥 MatchSpam lancé pour {duration_seconds} seconde(s) ! "
+            f"La team avec le plus d'emotes gagne +{points} point(s)."
+        )
+        await asyncio.sleep(duration_seconds)
+        await self.finish_matchspam(ctx.channel)
 
     @twitch_commands.command(name="match", aliases=["duel"])
     async def duel_command(self, ctx: twitch_commands.Context, *team_names: str) -> None:

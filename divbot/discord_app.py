@@ -933,9 +933,9 @@ async def announce_team_loss(team_name: str, defeats: int = 1) -> None:
     loser_gif_url = random.choice(loser_gif_urls)
     try:
         await team_channel.send(
-            f"💥 Défaite enregistrée (**{defeats}** au total) … courage, on revient plus forts !\n{loser_gif_url}"
+            f"{defeats} défaites… au moins vous êtes constants, c’est déjà ça.\n{loser_gif_url}"
             if defeats > 1
-            else f"💥 Défaite… courage, on revient plus forts !\n{loser_gif_url}"
+            else f"Défaite… belle coordination, chacun a bien perdu de son côté.\n{loser_gif_url}"
         )
     except discord.HTTPException:
         return

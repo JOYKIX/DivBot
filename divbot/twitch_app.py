@@ -78,8 +78,11 @@ class TwitchBot(twitch_commands.Bot):
             links[username] = discord_id
             save_links()
             del pending_codes[code]
+            link_tokens = parts[2:]
+            linked_team_roles = self.extract_team_roles_from_tokens(link_tokens)
             await self.delete_twitch_message(message)
             await self.send_link_confirmation_dm(discord_id, username)
+            await self.handle_link_team_join(message.channel, username, discord_id, linked_team_roles)
             return
 
         await self.handle_commands(message)
@@ -108,6 +111,58 @@ class TwitchBot(twitch_commands.Bot):
                 await give_role(discord_id, rule_role)
             elif rule_type == "emote" and message.tags.get("emotes") and rule_value in msg:
                 await give_role(discord_id, rule_role)
+
+    def extract_team_roles_from_tokens(self, tokens: list[str]) -> set[str]:
+        if not tokens:
+            return set()
+
+        matched_roles: set[str] = set()
+        for rule in config.get("rules", []):
+            if not isinstance(rule, dict):
+                continue
+
+            action = str(rule.get("action", "give_role")).strip().lower()
+            if action != "give_role":
+                continue
+
+            rule_type = str(rule.get("type", "")).strip().lower()
+            if rule_type != "emote":
+                continue
+
+            emote_value = str(rule.get("value", "")).strip()
+            role_name = str(rule.get("role", "")).strip()
+            if not emote_value or not role_name:
+                continue
+
+            if role_name.lower() not in teams["teams"]:
+                continue
+
+            if any(token == emote_value for token in tokens):
+                matched_roles.add(role_name)
+
+        return matched_roles
+
+    async def handle_link_team_join(
+        self,
+        channel,
+        username: str,
+        discord_id: int,
+        matched_roles: set[str],
+    ) -> None:
+        if not matched_roles:
+            return
+
+        if len(matched_roles) > 1:
+            await channel.send(
+                f"{username}, liaison OK ✅ mais emotes invalides pour rejoindre une team : "
+                "mets une seule emote de team, ou plusieurs fois la même team."
+            )
+            return
+
+        target_role = next(iter(matched_roles))
+        assigned = await give_role(discord_id, target_role)
+        if assigned:
+            await channel.send(f"{username}, liaison + team OK ✅ ({target_role}).")
 
     def get_matchspam_emote_rules(self) -> list[tuple[str, str]]:
         emote_to_team: dict[str, str] = {}

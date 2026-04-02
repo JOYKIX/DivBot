@@ -212,11 +212,14 @@ class LinkAccountView(discord.ui.View):
             (
                 "Pour rejoindre une division (**Les malicieux**, **Les audacieux** ou **Les radieux**) :\n\n"
                 "1. Appuie sur **🔗 Link Discord ↔ Twitch**.\n"
-                "2. Copie la commande générée, puis envoie-la dans le chat Twitch.\n"
-                "3. Envoie un deuxième message avec l'emote de la division souhaitée :\n"
+                "2. Envoie dans le chat Twitch soit :\n"
+                "   • un seul message `!link CODE` suivi de l'emote de la division\n"
+                "   • ou deux messages (`!link CODE` puis l'emote)\n"
+                "3. Emotes de division :\n"
                 "   • <:Les_Malicieux:1484997361569890416>\n"
                 "   • <:Les_Audacieux:1484997333740683417>\n"
                 "   • <:Les_Radieux:1484997282951594095>\n\n"
+                "⚠️ Si tu en mets plusieurs, elles doivent toutes correspondre à la même division.\n\n"
                 "✅ Une fois fait, tu rejoins ta division et son salon dédié s'ouvre pour toi."
             ),
             INFO_COLOR,
@@ -498,7 +501,7 @@ async def handle_linkpanel_request(interaction: discord.Interaction) -> None:
         (
             "Clique sur le bouton ci-dessous pour obtenir un **code privé**.\n"
             "Ensuite, envoie ce code dans le chat Twitch avec `!link CODE`.\n\n"
-            "Exemple : `!link ABC123`\n"
+            "Exemple : `!link ABC123` (ou `!link ABC123 EMOTE_DE_TA_TEAM`)\n"
             "Besoin d'aide pour choisir une division ? Utilise le bouton **Comment rejoindre une division**.\n"
             "🟣 Twitch : https://www.twitch.tv/zogaa_"
         ),

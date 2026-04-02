@@ -169,11 +169,8 @@ class TwitchBot(twitch_commands.Bot):
             if not isinstance(item, dict):
                 continue
             question_id = item.get("id")
-            question_text = str(item.get("question", "")).strip()
             raw_answers = item.get("answers", [])
             if not isinstance(question_id, int) or question_id < 1:
-                continue
-            if not question_text:
                 continue
             if not isinstance(raw_answers, list):
                 continue
@@ -189,7 +186,6 @@ class TwitchBot(twitch_commands.Bot):
             loaded_questions.append(
                 {
                     "id": question_id,
-                    "question": question_text,
                     "answers": normalized_answers,
                 }
             )
@@ -208,7 +204,7 @@ class TwitchBot(twitch_commands.Bot):
             return
 
         question = questions[current_index]
-        await channel.send(f"❓ ZogQuiz Q{question['id']} : {question['question']}")
+        await channel.send(f"❓ ZogQuiz Q{question['id']} : donne la réponse attendue dans le chat.")
 
     async def track_zogquiz_message(self, message) -> None:
         if self.active_zogquiz is None:

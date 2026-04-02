@@ -350,6 +350,85 @@ class TwitchBot(twitch_commands.Bot):
 
         await ctx.send(message)
 
+    @twitch_commands.command(name="pts")
+    async def points_command(self, ctx: twitch_commands.Context, target: str, points: int) -> None:
+        if not is_twitch_admin(ctx.author):
+            await ctx.send("Seuls le streamer ou les modérateurs peuvent modifier les points.")
+            return
+
+        team_name = await self.resolve_team_name_reference(target)
+        if team_name is None:
+            await ctx.send(
+                "Équipe introuvable. Utilise un nom d'équipe valide ou `@utilisateur` lié à une team."
+            )
+            return
+
+        teams["teams"][team_name]["points"] += points
+        save_teams()
+        await announce_team_points(team_name, points, reason="ajustement manuel")
+        if points >= 0:
+            await ctx.send(f"✅ {team_name.title()} gagne +{points} point(s).")
+        else:
+            await ctx.send(f"✅ {team_name.title()} perd {abs(points)} point(s).")
+
+    @twitch_commands.command(name="sm")
+    async def score_match_command(
+        self,
+        ctx: twitch_commands.Context,
+        user_1: str,
+        user_2: str,
+        user_3: str,
+        user_4: str,
+    ) -> None:
+        if not is_twitch_admin(ctx.author):
+            await ctx.send("Seuls le streamer ou les modérateurs peuvent attribuer les points SM.")
+            return
+
+        score_mapping = (
+            (user_1, 5),
+            (user_2, 3),
+            (user_3, 1),
+            (user_4, -1),
+        )
+        updated_teams: dict[str, int] = defaultdict(int)
+
+        for user_reference, points in score_mapping:
+            team_name = await self.resolve_team_name_reference(user_reference)
+            if team_name is None:
+                await ctx.send(
+                    f"Impossible de trouver une team pour {user_reference}. "
+                    "Tous les utilisateurs doivent être mentionnés avec `@` et liés à Discord."
+                )
+                return
+            updated_teams[team_name] += points
+
+        for team_name, points in updated_teams.items():
+            teams["teams"][team_name]["points"] += points
+            await announce_team_points(team_name, points, reason="SM")
+
+        save_teams()
+        recap = ", ".join(
+            f"{team_name.title()} {points:+d}"
+            for team_name, points in sorted(updated_teams.items())
+            if points != 0
+        )
+        await ctx.send(f"✅ SM appliqué : {recap if recap else 'aucun changement de points'}.")
+
+    async def resolve_team_name_reference(self, team_or_user_reference: str) -> str | None:
+        normalized_reference = team_or_user_reference.strip()
+        if not normalized_reference:
+            return None
+        if normalized_reference.startswith("@"):
+            twitch_username = normalized_reference[1:].strip().lower()
+            if not twitch_username:
+                return None
+            return await self.resolve_team_name_for_twitch_user(twitch_username)
+
+        normalized_team_name = normalized_reference.lower()
+        if normalized_team_name in teams["teams"]:
+            return normalized_team_name
+        return None
+
     async def resolve_team_name_for_twitch_user(self, twitch_username: str) -> str | None:
         discord_id = links.get(twitch_username)
         if discord_id is None:

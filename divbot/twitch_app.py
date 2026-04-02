@@ -375,20 +375,20 @@ class TwitchBot(twitch_commands.Bot):
     async def score_match_command(
         self,
         ctx: twitch_commands.Context,
-        user_1: str,
-        user_2: str,
-        user_3: str,
-        user_4: str,
+        participant_1: str,
+        participant_2: str,
+        participant_3: str,
+        participant_4: str,
     ) -> None:
         if not is_twitch_admin(ctx.author):
             await ctx.send("Seuls le streamer ou les modérateurs peuvent attribuer les points SM.")
             return
 
         score_mapping = (
-            (user_1, 5),
-            (user_2, 3),
-            (user_3, 1),
-            (user_4, -1),
+            (participant_1, 5),
+            (participant_2, 3),
+            (participant_3, 1),
+            (participant_4, -1),
         )
         updated_teams: dict[str, int] = defaultdict(int)
 
@@ -397,7 +397,7 @@ class TwitchBot(twitch_commands.Bot):
             if team_name is None:
                 await ctx.send(
                     f"Impossible de trouver une team pour {user_reference}. "
-                    "Tous les utilisateurs doivent être mentionnés avec `@` et liés à Discord."
+                    "Tu peux utiliser `@utilisateur` (lié à Discord) ou directement le nom d'équipe."
                 )
                 return
             updated_teams[team_name] += points

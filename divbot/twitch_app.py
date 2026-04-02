@@ -78,8 +78,8 @@ class TwitchBot(twitch_commands.Bot):
             links[username] = discord_id
             save_links()
             del pending_codes[code]
-            link_tokens = parts[2:]
-            linked_team_roles = self.extract_team_roles_from_tokens(link_tokens)
+            link_message_tail = " ".join(parts[2:])
+            linked_team_roles = self.extract_team_roles_from_link_message(link_message_tail)
             await self.delete_twitch_message(message)
             await self.send_link_confirmation_dm(discord_id, username)
             await self.handle_link_team_join(message.channel, username, discord_id, linked_team_roles)
@@ -112,10 +112,13 @@ class TwitchBot(twitch_commands.Bot):
             elif rule_type == "emote" and message.tags.get("emotes") and rule_value in msg:
                 await give_role(discord_id, rule_role)
 
-    def extract_team_roles_from_tokens(self, tokens: list[str]) -> set[str]:
-        if not tokens:
+    def extract_team_roles_from_link_message(self, link_message_tail: str) -> set[str]:
+        normalized_tail = link_message_tail.strip()
+        if not normalized_tail:
             return set()
 
+        tail_tokens = normalized_tail.split()
+        normalized_tail_lower = normalized_tail.lower()
         matched_roles: set[str] = set()
         for rule in config.get("rules", []):
             if not isinstance(rule, dict):
@@ -126,18 +129,22 @@ class TwitchBot(twitch_commands.Bot):
                 continue
 
             rule_type = str(rule.get("type", "")).strip().lower()
-            if rule_type != "emote":
+            if rule_type not in {"emote", "contains"}:
                 continue
 
-            emote_value = str(rule.get("value", "")).strip()
+            rule_value = str(rule.get("value", "")).strip()
             role_name = str(rule.get("role", "")).strip()
-            if not emote_value or not role_name:
+            if not rule_value or not role_name:
                 continue
 
             if role_name.lower() not in teams["teams"]:
                 continue
 
-            if any(token == emote_value for token in tokens):
+            if rule_type == "emote" and any(token == rule_value for token in tail_tokens):
+                matched_roles.add(role_name)
+                continue
+
+            if rule_type == "contains" and rule_value.lower() in normalized_tail_lower:
                 matched_roles.add(role_name)
 
         return matched_roles

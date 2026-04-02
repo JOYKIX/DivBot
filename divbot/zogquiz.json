@@ -1,0 +1,5 @@
+[
+  {"id": 0, "answers": ["exemple reponse 1", "exemple reponse 2"]},
+  {"id": 1, "answers": ["twitch", "twitch.tv", "twitch tv"]},
+  {"id": 2, "answers": ["!link", "link", "commande link"]}
+]

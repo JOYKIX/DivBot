@@ -967,6 +967,58 @@ team_record_snapshot = snapshot_team_record_state()
 register_team_update_callback(announce_team_record_changes)
 
 
+def get_zogquiz_scores() -> dict[str, int]:
+    raw_data = load_data("zogquiz_scores", {"scores": {}})
+    if not isinstance(raw_data, dict):
+        return {}
+    raw_scores = raw_data.get("scores", {})
+    if not isinstance(raw_scores, dict):
+        return {}
+    normalized_scores: dict[str, int] = {}
+    for discord_id, score_value in raw_scores.items():
+        try:
+            cleaned_score = int(score_value)
+        except (TypeError, ValueError):
+            continue
+        if cleaned_score < 0:
+            cleaned_score = 0
+        normalized_scores[str(discord_id)] = cleaned_score
+    return normalized_scores
+
+
+@discord_bot.tree.command(name="zogquiz", description="Afficher le classement du ZogQuiz", guild=guild_object)
+async def zogquiz_leaderboard(interaction: discord.Interaction) -> None:
+    scores = get_zogquiz_scores()
+    if not scores:
+        await send_interaction_embed(
+            interaction,
+            "Classement ZogQuiz",
+            "Aucun point enregistré pour le moment.",
+            INFO_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    lines: list[str] = []
+    for index, (discord_id, score) in enumerate(sorted_scores, start=1):
+        mention = f"<@{discord_id}>"
+        lines.append(f"**{index}.** {mention} — **{score}** point(s)")
+
+    embed = build_embed(
+        "🏆 Classement ZogQuiz",
+        "\n".join(lines[:20]),
+        INFO_COLOR,
+    )
+    if len(sorted_scores) > 20:
+        embed.set_footer(text=f"{len(sorted_scores)} joueur(s) classé(s) au total.")
+
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed)
+        return
+    await interaction.response.send_message(embed=embed)
+
+
 async def announce_team_joins(before: discord.Member, current_member: discord.Member) -> None:
     before_team_role_ids = team_role_ids_for_member(before)
     joined_team_roles = [

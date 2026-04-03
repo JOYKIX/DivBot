@@ -1671,4 +1671,18 @@ async def admin_command_error(interaction: discord.Interaction, error: app_comma
 
 
 async def start_discord_bot() -> None:
-    await discord_bot.start(DISCORD_TOKEN)
+    retry_delay_seconds = 60
+
+    while True:
+        try:
+            await discord_bot.start(DISCORD_TOKEN)
+            return
+        except discord.HTTPException as error:
+            if error.status != 429:
+                raise
+
+            print(
+                f"[DISCORD] Connexion refusée (HTTP 429). "
+                f"Nouvelle tentative dans {retry_delay_seconds} secondes."
+            )
+            await asyncio.sleep(retry_delay_seconds)

@@ -716,4 +716,13 @@ class TwitchBot(twitch_commands.Bot):
 
 async def start_twitch_bot() -> None:
     bot = TwitchBot()
-    await bot.start()
+    try:
+        await bot.start()
+    except AttributeError as error:
+        if "'NoneType' object has no attribute 'cancel'" not in str(error):
+            raise
+
+        print(
+            "[TWITCH] Fermeture incomplète ignorée après une interruption réseau "
+            "(bug connu de twitchio)."
+        )

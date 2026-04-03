@@ -60,9 +60,13 @@ def initialize_firebase() -> None:
     global firebase_enabled
     try:
         if not FIREBASE_CREDENTIALS_PATH.exists():
-            raise RuntimeError(
-                f"[FIREBASE] Fichier de credentials introuvable : {FIREBASE_CREDENTIALS_PATH}"
+            print(
+                "[FIREBASE] Fichier de credentials introuvable : "
+                f"{FIREBASE_CREDENTIALS_PATH}. "
+                "Le bot démarre en mode local (données non persistées)."
             )
+            firebase_enabled = False
+            return
 
         cred = credentials.Certificate(str(FIREBASE_CREDENTIALS_PATH))
         firebase_admin.initialize_app(
@@ -75,7 +79,11 @@ def initialize_firebase() -> None:
         firebase_enabled = True
         print(f"[FIREBASE] Realtime Database déjà initialisée : {FIREBASE_DATABASE_URL}")
     except Exception as error:
-        raise RuntimeError(f"[FIREBASE] Initialisation impossible : {error}") from error
+        print(
+            f"[FIREBASE] Initialisation impossible : {error}. "
+            "Le bot démarre en mode local (données non persistées)."
+        )
+        firebase_enabled = False
 
 
 def load_data(key: str, default: Any) -> Any:
@@ -94,6 +102,8 @@ def save_data(key: str, data: Any) -> None:
 
 
 def ensure_firebase_defaults() -> None:
+    if not firebase_enabled:
+        return
     for key, default_value in DATA_DEFAULTS.items():
         ref = db.reference(key)
         if ref.get() is None:

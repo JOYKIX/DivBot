@@ -3,6 +3,7 @@ import json
 import re
 import time
 from collections import defaultdict
+from statistics import mean
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,7 @@ class TwitchBot(twitch_commands.Bot):
         )
         self.active_matchspam: dict[str, Any] | None = None
         self.active_zogquiz: dict[str, Any] | None = None
+        self.active_poll: dict[str, Any] | None = None
         self.zogquiz_scores: dict[str, int] = self.load_zogquiz_scores()
 
     async def event_ready(self) -> None:
@@ -68,6 +70,7 @@ class TwitchBot(twitch_commands.Bot):
 
         await self.track_matchspam_message(msg)
         await self.track_zogquiz_message(message)
+        await self.track_poll_message(message)
 
         if msg.lower().startswith("!link"):
             cleanup_expired_codes()
@@ -241,6 +244,58 @@ class TwitchBot(twitch_commands.Bot):
             f"✅ {message.author.name} trouve la bonne réponse et gagne 1 point !"
         )
         await self.ask_next_zogquiz_question(message.channel)
+
+    async def track_poll_message(self, message) -> None:
+        if self.active_poll is None:
+            return
+        if message.author is None or not message.content:
+            return
+
+        note = self.parse_poll_vote(message.content)
+        if note is None:
+            return
+
+        voter_name = message.author.name.lower()
+        votes: dict[str, float] = self.active_poll["votes"]
+        votes[voter_name] = note
+
+    def parse_poll_vote(self, raw_message: str) -> float | None:
+        match = re.fullmatch(r"\s*(\d+(?:[\.,]\d+)?)\s*", raw_message)
+        if match is None:
+            return None
+
+        try:
+            note = float(match.group(1).replace(",", "."))
+        except ValueError:
+            return None
+
+        if note < 0 or note > 10:
+            return None
+
+        doubled_note = note * 2
+        if abs(doubled_note - round(doubled_note)) > 1e-9:
+            return None
+
+        return round(doubled_note) / 2
+
+    async def finish_poll(self, channel) -> None:
+        if self.active_poll is None:
+            return
+
+        poll_data = self.active_poll
+        self.active_poll = None
+        votes: dict[str, float] = poll_data["votes"]
+
+        if not votes:
+            await channel.send("⏱️ Sondage terminé : aucune note valide reçue.")
+            return
+
+        average = mean(votes.values())
+        average_rounded = round(average * 2) / 2
+        await channel.send(
+            "⏱️ Sondage terminé ! "
+            f"{len(votes)} note(s) reçue(s), moyenne : {average_rounded:.1f}/10."
+        )
 
     def extract_team_roles_from_link_message(self, link_message_tail: str) -> set[str]:
         normalized_tail = link_message_tail.strip()
@@ -445,6 +500,28 @@ class TwitchBot(twitch_commands.Bot):
         _, message, new_duel = start_duel(selected_teams, common.active_duel)
         common.active_duel = new_duel
         await ctx.send(message)
+
+    @twitch_commands.command(name="poll")
+    async def poll_command(self, ctx: twitch_commands.Context, duration_seconds: int) -> None:
+        if not is_twitch_admin(ctx.author):
+            await ctx.send("Seuls le streamer ou les modérateurs peuvent lancer un sondage.")
+            return
+
+        if duration_seconds <= 0:
+            await ctx.send("La durée doit être supérieure à 0 seconde.")
+            return
+
+        if self.active_poll is not None:
+            await ctx.send("Un sondage est déjà en cours.")
+            return
+
+        self.active_poll = {"votes": {}}
+        await ctx.send(
+            f"📊 Sondage lancé pour {duration_seconds} seconde(s) ! "
+            "Écris simplement une note de 0 à 10 (les .5 sont acceptés)."
+        )
+        await asyncio.sleep(duration_seconds)
+        await self.finish_poll(ctx.channel)
 
     @twitch_commands.command(name="win")
     async def win_command(self, ctx: twitch_commands.Context, winner_reference: str, points: int = 1) -> None:

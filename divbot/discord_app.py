@@ -95,7 +95,6 @@ class DiscordBot(discord_commands.Bot):
     def __init__(self) -> None:
         super().__init__(command_prefix="!", intents=intents)
         self.synced = False
-        self.leaderboard_refresh_task: asyncio.Task[None] | None = None
         self.team_spam_release_task: asyncio.Task[None] | None = None
 
     async def setup_hook(self) -> None:
@@ -110,8 +109,6 @@ class DiscordBot(discord_commands.Bot):
             synced_commands = await self.tree.sync(guild=guild_object)
             print(f"[DISCORD] {len(synced_commands)} commandes slash synchronisées sur {GUILD_ID}")
             self.synced = True
-        if self.leaderboard_refresh_task is None or self.leaderboard_refresh_task.done():
-            self.leaderboard_refresh_task = asyncio.create_task(self.refresh_leaderboards_every_minute())
         if self.team_spam_release_task is None or self.team_spam_release_task.done():
             self.team_spam_release_task = asyncio.create_task(self.release_team_spam_members_hourly())
         print(f"[DISCORD] Connecté : {self.user}")
@@ -134,11 +131,9 @@ class DiscordBot(discord_commands.Bot):
         if team_role_ids_for_member(member):
             await refresh_registered_leaderboards()
 
-    async def refresh_leaderboards_every_minute(self) -> None:
-        while not self.is_closed():
+    async def on_member_join(self, member: discord.Member) -> None:
+        if team_role_ids_for_member(member):
             await refresh_registered_leaderboards()
-            sleep_seconds = max(1.0, 60 - (time.time() % 60))
-            await asyncio.sleep(sleep_seconds)
 
     async def release_team_spam_members_hourly(self) -> None:
         while not self.is_closed():

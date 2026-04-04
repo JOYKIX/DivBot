@@ -2,7 +2,7 @@ import asyncio
 import random
 import time
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Awaitable, Callable, Literal, TypeVar
 
 import discord
 from discord import app_commands
@@ -42,6 +42,31 @@ from divbot.team_logic import (
     team_member_limit_label,
     team_overview_embed,
 )
+
+API_RETRY_BASE_DELAY_SECONDS = 1.0
+API_RETRY_ATTEMPTS = 4
+LEADERBOARD_REFRESH_DEBOUNCE_SECONDS = 2.0
+
+_T = TypeVar("_T")
+
+
+async def run_discord_request(
+    request_factory: Callable[[], Awaitable[_T]],
+    *,
+    max_attempts: int = API_RETRY_ATTEMPTS,
+) -> _T:
+    """Run a Discord API request with retry/backoff on 429 responses only."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await request_factory()
+        except discord.HTTPException as error:
+            if error.status != 429 or attempt >= max_attempts:
+                raise
+            retry_after = float(getattr(error, "retry_after", 0) or 0)
+            delay = retry_after if retry_after > 0 else API_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+            await asyncio.sleep(delay)
+
+    raise RuntimeError("Discord request retry loop exhausted unexpectedly")
 
 
 
@@ -96,6 +121,39 @@ class DiscordBot(discord_commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.synced = False
         self.team_spam_release_task: asyncio.Task[None] | None = None
+        self.leaderboard_refresh_task: asyncio.Task[None] | None = None
+        self._guild_cache: dict[int, discord.Guild] = {}
+        self._text_channel_cache: dict[int, discord.TextChannel] = {}
+
+    def get_cached_guild(self, guild_id: int) -> discord.Guild | None:
+        # Optimization: re-use cached guild objects to avoid repeated resolver work.
+        guild = self._guild_cache.get(guild_id)
+        if guild is None:
+            guild = self.get_guild(guild_id)
+            if guild is not None:
+                self._guild_cache[guild_id] = guild
+        return guild
+
+    def get_cached_text_channel(self, channel_id: int) -> discord.TextChannel | None:
+        # Optimization: central channel cache to avoid duplicate lookup paths.
+        channel = self._text_channel_cache.get(channel_id)
+        if channel is None:
+            raw_channel = self.get_channel(channel_id)
+            if isinstance(raw_channel, discord.TextChannel):
+                self._text_channel_cache[channel_id] = raw_channel
+                channel = raw_channel
+        return channel
+
+    async def schedule_leaderboard_refresh(self) -> None:
+        # Optimization: debounce bursts of member events into a single leaderboard refresh.
+        if self.leaderboard_refresh_task is not None and not self.leaderboard_refresh_task.done():
+            return
+
+        async def _runner() -> None:
+            await asyncio.sleep(LEADERBOARD_REFRESH_DEBOUNCE_SECONDS)
+            await refresh_registered_leaderboards()
+
+        self.leaderboard_refresh_task = asyncio.create_task(_runner())
 
     async def setup_hook(self) -> None:
         self.tree.copy_global_to(guild=guild_object)
@@ -125,15 +183,15 @@ class DiscordBot(discord_commands.Bot):
             return
         await announce_team_joins(before, current_member)
         if team_role_ids_for_member(before) != team_role_ids_for_member(current_member):
-            await refresh_registered_leaderboards()
+            await self.schedule_leaderboard_refresh()
 
     async def on_member_remove(self, member: discord.Member) -> None:
         if team_role_ids_for_member(member):
-            await refresh_registered_leaderboards()
+            await self.schedule_leaderboard_refresh()
 
     async def on_member_join(self, member: discord.Member) -> None:
         if team_role_ids_for_member(member):
-            await refresh_registered_leaderboards()
+            await self.schedule_leaderboard_refresh()
 
     async def release_team_spam_members_hourly(self) -> None:
         while not self.is_closed():
@@ -276,7 +334,7 @@ def get_team_enforcement_lock(member_id: int) -> asyncio.Lock:
 
 
 async def restore_member_after_team_spam(guild_id: int, member_id: int, team_role_id: int | None) -> None:
-    guild = discord_bot.get_guild(guild_id)
+    guild = discord_bot.get_cached_guild(guild_id)
     if guild is None:
         return
 
@@ -404,7 +462,7 @@ async def refresh_registered_leaderboards() -> None:
             continue
 
         try:
-            await message.edit(embed=leaderboard_embed(guild))
+            await run_discord_request(lambda: message.edit(embed=leaderboard_embed(guild)))
         except (discord.NotFound, discord.Forbidden):
             clear_leaderboard_registration(channel_id)
             leaderboard_messages.pop(message_id, None)
@@ -416,7 +474,7 @@ async def refresh_registered_leaderboards() -> None:
         update_leaderboard_last_refresh(channel_id)
 
 
-register_team_update_callback(refresh_registered_leaderboards)
+register_team_update_callback(discord_bot.schedule_leaderboard_refresh)
 
 
 def register_leaderboard_message(message: discord.Message) -> None:
@@ -447,11 +505,11 @@ def update_leaderboard_last_refresh(channel_id: int) -> None:
 
 
 async def fetch_leaderboard_message(channel_id: int, message_id: int) -> discord.Message | None:
-    channel = discord_bot.get_channel(channel_id)
-    if not isinstance(channel, discord.TextChannel):
+    channel = discord_bot.get_cached_text_channel(channel_id)
+    if channel is None:
         return None
     try:
-        return await channel.fetch_message(message_id)
+        return await run_discord_request(lambda: channel.fetch_message(message_id))
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         return None
 
@@ -461,11 +519,11 @@ async def ensure_leaderboard_channel_message(channel_id: int) -> None:
     if entry is not None and int(entry.get("message_id", 0)) > 0:
         return
 
-    channel = discord_bot.get_channel(channel_id)
-    if not isinstance(channel, discord.TextChannel):
+    channel = discord_bot.get_cached_text_channel(channel_id)
+    if channel is None:
         return
 
-    sent_message = await channel.send(embed=leaderboard_embed(channel.guild))
+    sent_message = await run_discord_request(lambda: channel.send(embed=leaderboard_embed(channel.guild)))
     register_leaderboard_message(sent_message)
 
 
@@ -502,7 +560,7 @@ async def handle_linkpanel_request(interaction: discord.Interaction) -> None:
         ),
         INFO_COLOR,
     )
-    await interaction.channel.send(embed=embed, view=LinkAccountView())
+    await run_discord_request(lambda: interaction.channel.send(embed=embed, view=LinkAccountView()))
     await send_interaction_embed(interaction, "Panel envoyé", "Le message de liaison a été publié.", SUCCESS_COLOR, ephemeral=True)
 
 
@@ -982,6 +1040,7 @@ def get_zogquiz_scores() -> dict[str, int]:
 
 
 @discord_bot.tree.command(name="zogquiz", description="Afficher le classement du ZogQuiz", guild=guild_object)
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
 async def zogquiz_leaderboard(interaction: discord.Interaction) -> None:
     scores = get_zogquiz_scores()
     if not scores:
@@ -1008,10 +1067,9 @@ async def zogquiz_leaderboard(interaction: discord.Interaction) -> None:
     if len(sorted_scores) > 20:
         embed.set_footer(text=f"{len(sorted_scores)} joueur(s) classé(s) au total.")
 
-    if interaction.response.is_done():
-        await interaction.followup.send(embed=embed)
-        return
-    await interaction.response.send_message(embed=embed)
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=False)
+    await interaction.followup.send(embed=embed)
 
 
 async def announce_team_joins(before: discord.Member, current_member: discord.Member) -> None:
@@ -1536,6 +1594,7 @@ async def team_pardon(interaction: discord.Interaction, member: discord.Member) 
 
 
 @team_group.command(name="leaderboard", description="Afficher le classement des équipes")
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
 async def team_leaderboard(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
@@ -1543,16 +1602,16 @@ async def team_leaderboard(interaction: discord.Interaction) -> None:
         return
 
     embed = leaderboard_embed(guild)
-    if interaction.response.is_done():
-        sent_message = await interaction.followup.send(embed=embed, wait=True)
-    else:
-        await interaction.response.send_message(embed=embed)
-        sent_message = await interaction.original_response()
+    # Optimization: defer once, then send one follow-up (avoids extra original_response fetch call).
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=False)
+    sent_message = await interaction.followup.send(embed=embed, wait=True)
 
     register_leaderboard_message(sent_message)
 
 
 @team_group.command(name="list", description="Afficher les membres et les statistiques des équipes")
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
 async def team_list(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
@@ -1560,13 +1619,13 @@ async def team_list(interaction: discord.Interaction) -> None:
         return
 
     embed = team_overview_embed(guild)
-    if interaction.response.is_done():
-        await interaction.followup.send(embed=embed)
-        return
-    await interaction.response.send_message(embed=embed)
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=False)
+    await interaction.followup.send(embed=embed)
 
 
 @team_group.command(name="detail", description="Voir le détail d'une team et ses membres")
+@app_commands.checks.cooldown(1, 3.0, key=lambda i: (i.guild_id, i.user.id))
 @app_commands.describe(role="Rôle de la team (ex: @NomDeLaTeam)")
 async def team_detail(interaction: discord.Interaction, role: discord.Role) -> None:
     guild = interaction.guild
@@ -1576,10 +1635,9 @@ async def team_detail(interaction: discord.Interaction, role: discord.Role) -> N
 
     embed = team_detail_embed(guild, role)
     is_error_embed = embed.title == "Équipe introuvable"
-    if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, ephemeral=is_error_embed)
-        return
-    await interaction.response.send_message(embed=embed, ephemeral=is_error_embed)
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=False, ephemeral=is_error_embed)
+    await interaction.followup.send(embed=embed, ephemeral=is_error_embed)
 
 
 @team_group.command(name="captain", description="Définir le capitaine d'une team")
@@ -1658,7 +1716,13 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @rule_add.error
 @rule_remove.error
 @team_detail.error
+@team_leaderboard.error
+@team_list.error
+@zogquiz_leaderboard.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await send_interaction_embed(interaction, "Cooldown", f"Réessaie dans {error.retry_after:.1f}s.", WARNING_COLOR, ephemeral=True)
+        return
     if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
         await send_interaction_embed(interaction, "Permission refusée", "Tu n'as pas la permission d'utiliser cette commande.", ERROR_COLOR, ephemeral=True)
         return
@@ -1666,7 +1730,7 @@ async def admin_command_error(interaction: discord.Interaction, error: app_comma
 
 
 async def start_discord_bot() -> None:
-    retry_delay_seconds = 60
+    retry_delay_seconds = API_RETRY_BASE_DELAY_SECONDS
 
     while True:
         try:
@@ -1676,8 +1740,11 @@ async def start_discord_bot() -> None:
             if error.status != 429:
                 raise
 
+            retry_after = float(getattr(error, "retry_after", 0) or 0)
+            wait_seconds = retry_after if retry_after > 0 else retry_delay_seconds
             print(
                 f"[DISCORD] Connexion refusée (HTTP 429). "
-                f"Nouvelle tentative dans {retry_delay_seconds} secondes."
+                f"Nouvelle tentative dans {wait_seconds:.1f} secondes."
             )
-            await asyncio.sleep(retry_delay_seconds)
+            await asyncio.sleep(wait_seconds)
+            retry_delay_seconds = min(retry_delay_seconds * 2, 60)

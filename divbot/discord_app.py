@@ -168,7 +168,7 @@ class DiscordBot(discord_commands.Bot):
             print(f"[DISCORD] {len(synced_commands)} commandes slash synchronisées sur {GUILD_ID}")
             self.synced = True
         if self.team_spam_release_task is None or self.team_spam_release_task.done():
-            self.team_spam_release_task = asyncio.create_task(self.release_team_spam_members_hourly())
+            self.team_spam_release_task = asyncio.create_task(self.release_team_spam_members_periodic())
         print(f"[DISCORD] Connecté : {self.user}")
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
@@ -193,11 +193,10 @@ class DiscordBot(discord_commands.Bot):
         if team_role_ids_for_member(member):
             await self.schedule_leaderboard_refresh()
 
-    async def release_team_spam_members_hourly(self) -> None:
+    async def release_team_spam_members_periodic(self) -> None:
         while not self.is_closed():
             await release_due_team_spam_members()
-            sleep_seconds = max(1.0, 60 * 60 - (time.time() % (60 * 60)))
-            await asyncio.sleep(sleep_seconds)
+            await asyncio.sleep(TEAM_SPAM_RELEASE_POLL_SECONDS)
 
 
 class LinkAccountView(discord.ui.View):
@@ -307,9 +306,13 @@ DELINQUENT_ROLE_ID = 1487122699275862099
 TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
+TEAM_SPAM_RELEASE_POLL_SECONDS = 30
+ROULETTE_JOIN_WINDOW_SECONDS = 10
+ROULETTE_PUNISHMENT_SECONDS = 60 * 10
 TEAM_SPAM_PUNISHMENTS_KEY = "team_spam_punishments"
 team_switch_violations: dict[int, int] = {}
 team_enforcement_locks: dict[int, asyncio.Lock] = {}
+roulette_russe_locks: dict[int, asyncio.Lock] = {}
 team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_data(
     TEAM_SPAM_PUNISHMENTS_KEY, {"members": {}}
 )
@@ -333,7 +336,20 @@ def get_team_enforcement_lock(member_id: int) -> asyncio.Lock:
     return lock
 
 
-async def restore_member_after_team_spam(guild_id: int, member_id: int, team_role_id: int | None) -> None:
+def get_roulette_russe_lock(guild_id: int) -> asyncio.Lock:
+    lock = roulette_russe_locks.get(guild_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        roulette_russe_locks[guild_id] = lock
+    return lock
+
+
+async def restore_member_after_team_spam(
+    guild_id: int,
+    member_id: int,
+    team_role_id: int | None,
+    restore_role_ids: list[int] | None = None,
+) -> None:
     guild = discord_bot.get_cached_guild(guild_id)
     if guild is None:
         return
@@ -343,18 +359,22 @@ async def restore_member_after_team_spam(guild_id: int, member_id: int, team_rol
         return
 
     delinquent_role = guild.get_role(DELINQUENT_ROLE_ID)
-    restored_role = guild.get_role(TEAM_SPAM_RESTORE_ROLE_ID)
-    team_role = guild.get_role(team_role_id) if team_role_id is not None else None
-
     try:
         if delinquent_role is not None and delinquent_role in member.roles:
             await member.remove_roles(delinquent_role, reason="Fin de sanction pour spam de changement de team")
 
+        role_ids = restore_role_ids
+        if role_ids is None:
+            role_ids = []
+            if TEAM_SPAM_RESTORE_ROLE_ID > 0:
+                role_ids.append(TEAM_SPAM_RESTORE_ROLE_ID)
+            if team_role_id is not None:
+                role_ids.append(team_role_id)
         roles_to_restore = []
-        if restored_role is not None and restored_role not in member.roles:
-            roles_to_restore.append(restored_role)
-        if team_role is not None and team_role not in member.roles:
-            roles_to_restore.append(team_role)
+        for role_id in role_ids:
+            role = guild.get_role(role_id)
+            if role is not None and role not in member.roles:
+                roles_to_restore.append(role)
 
         if roles_to_restore:
             await member.add_roles(*roles_to_restore, reason="Fin de sanction pour spam de changement de team")
@@ -366,12 +386,60 @@ def persist_team_spam_punishments() -> None:
     save_data(TEAM_SPAM_PUNISHMENTS_KEY, team_spam_punishments)
 
 
-def register_team_spam_punishment(member_id: int, guild_id: int, team_role_id: int | None) -> None:
+async def apply_temporary_delinquent_punishment(
+    member: discord.Member,
+    *,
+    duration_seconds: int,
+    reason: str,
+    restore_role_ids: list[int],
+    source: str,
+) -> bool:
+    delinquent_role = member.guild.get_role(DELINQUENT_ROLE_ID)
+    if delinquent_role is None:
+        return False
+
+    roles_to_remove = [role for role in member.roles if role.id in set(restore_role_ids)]
+    try:
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove, reason=reason)
+        if delinquent_role not in member.roles:
+            await member.add_roles(delinquent_role, reason=reason)
+    except discord.HTTPException:
+        return False
+
+    register_team_spam_punishment(
+        member.id,
+        member.guild.id,
+        team_role_id=None,
+        restore_role_ids=[role.id for role in roles_to_remove],
+        duration_seconds=duration_seconds,
+        source=source,
+    )
+    return True
+
+
+def register_team_spam_punishment(
+    member_id: int,
+    guild_id: int,
+    team_role_id: int | None,
+    *,
+    restore_role_ids: list[int] | None = None,
+    duration_seconds: int = TEAM_SPAM_RESTORE_DELAY_SECONDS,
+    source: str = "team_spam",
+) -> None:
     now = datetime.now(timezone.utc)
-    release_at = now.timestamp() + TEAM_SPAM_RESTORE_DELAY_SECONDS
+    release_at = now.timestamp() + duration_seconds
+    if restore_role_ids is None:
+        restore_role_ids = []
+        if TEAM_SPAM_RESTORE_ROLE_ID > 0:
+            restore_role_ids.append(TEAM_SPAM_RESTORE_ROLE_ID)
+        if team_role_id is not None:
+            restore_role_ids.append(team_role_id)
     team_spam_punishments["members"][str(member_id)] = {
         "guild_id": guild_id,
         "team_role_id": team_role_id,
+        "restore_role_ids": restore_role_ids,
+        "source": source,
         "punished_at_utc": now.isoformat(),
         "release_at_utc": datetime.fromtimestamp(release_at, tz=timezone.utc).isoformat(),
     }
@@ -412,12 +480,20 @@ async def release_due_team_spam_members() -> None:
             team_role_id = int(team_role_raw) if team_role_raw is not None else None
         except (TypeError, ValueError):
             team_role_id = None
+        restore_role_ids_raw = punishment_data.get("restore_role_ids", [])
+        restore_role_ids: list[int] = []
+        if isinstance(restore_role_ids_raw, list):
+            for role_id in restore_role_ids_raw:
+                try:
+                    restore_role_ids.append(int(role_id))
+                except (TypeError, ValueError):
+                    continue
         try:
             member_id_int = int(member_id)
         except ValueError:
             member_id_int = 0
         if guild_id > 0 and member_id_int > 0:
-            await restore_member_after_team_spam(guild_id, member_id_int, team_role_id)
+            await restore_member_after_team_spam(guild_id, member_id_int, team_role_id, restore_role_ids or None)
         team_spam_punishments["members"].pop(member_id, None)
 
     persist_team_spam_punishments()
@@ -1037,6 +1113,110 @@ def get_zogquiz_scores() -> dict[str, int]:
             cleaned_score = 0
         normalized_scores[str(discord_id)] = cleaned_score
     return normalized_scores
+
+
+class RouletteRusseJoinView(discord.ui.View):
+    def __init__(self, host_id: int) -> None:
+        super().__init__(timeout=ROULETTE_JOIN_WINDOW_SECONDS)
+        self.host_id = host_id
+        self.participant_ids: set[int] = {host_id}
+
+    @discord.ui.button(label="Rejoindre", style=discord.ButtonStyle.danger, emoji="🔫")
+    async def join(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            await send_interaction_embed(interaction, "Erreur", "Commande serveur uniquement.", ERROR_COLOR, ephemeral=True)
+            return
+
+        if interaction.user.id in self.participant_ids:
+            await send_interaction_embed(interaction, "Déjà inscrit", "Tu participes déjà à la roulette russe.", WARNING_COLOR, ephemeral=True)
+            return
+
+        self.participant_ids.add(interaction.user.id)
+        await send_interaction_embed(
+            interaction,
+            "Inscription validée",
+            f"Tu rejoins la roulette russe. Joueurs actuels : **{len(self.participant_ids)}**.",
+            SUCCESS_COLOR,
+            ephemeral=True,
+        )
+
+
+@discord_bot.tree.command(name="rouletterusse", description="Lance une roulette russe (10s pour rejoindre)", guild=guild_object)
+@app_commands.checks.cooldown(1, 15.0, key=lambda i: (i.guild_id, i.user.id))
+async def roulette_russe(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None or not isinstance(interaction.user, discord.Member):
+        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
+        return
+
+    lock = get_roulette_russe_lock(guild.id)
+    if lock.locked():
+        await send_interaction_embed(interaction, "Partie en cours", "Une roulette russe est déjà active sur ce serveur.", WARNING_COLOR, ephemeral=True)
+        return
+
+    async with lock:
+        view = RouletteRusseJoinView(interaction.user.id)
+        await interaction.response.send_message(
+            embed=build_embed(
+                "🔫 Roulette russe",
+                (
+                    f"{interaction.user.mention} lance une roulette russe.\n"
+                    f"Tu as **{ROULETTE_JOIN_WINDOW_SECONDS} secondes** pour cliquer sur **Rejoindre**."
+                ),
+                WARNING_COLOR,
+            ),
+            view=view,
+        )
+
+        await asyncio.sleep(ROULETTE_JOIN_WINDOW_SECONDS)
+        view.stop()
+
+        participants: list[discord.Member] = []
+        for participant_id in view.participant_ids:
+            member = guild.get_member(participant_id)
+            if member is not None:
+                participants.append(member)
+
+        if len(participants) < 2:
+            await interaction.followup.send(
+                embed=build_embed(
+                    "Roulette annulée",
+                    "Pas assez de joueurs (minimum 2).",
+                    WARNING_COLOR,
+                )
+            )
+            return
+
+        loser = random.choice(participants)
+        restore_role_ids = [role.id for role in loser.roles if role.id == TEAM_SPAM_RESTORE_ROLE_ID or get_team_entry_by_role(role) is not None]
+        punished = await apply_temporary_delinquent_punishment(
+            loser,
+            duration_seconds=ROULETTE_PUNISHMENT_SECONDS,
+            reason="Roulette russe: sanction temporaire",
+            restore_role_ids=restore_role_ids,
+            source="roulette_russe",
+        )
+        if not punished:
+            await interaction.followup.send(
+                embed=build_embed(
+                    "Erreur roulette",
+                    "Impossible d'appliquer la sanction (rôle manquant ou permissions insuffisantes).",
+                    ERROR_COLOR,
+                )
+            )
+            return
+
+        await interaction.followup.send(
+            embed=build_embed(
+                "💥 BOOM",
+                (
+                    f"Perdant: {loser.mention}\n"
+                    "Sanction: retrait team + plèbe, rôle **Délinquant** pendant **10 minutes**.\n"
+                    "Ses rôles sont sauvegardés et seront restaurés automatiquement."
+                ),
+                WARNING_COLOR,
+            )
+        )
 
 
 @discord_bot.tree.command(name="zogquiz", description="Afficher le classement du ZogQuiz", guild=guild_object)
@@ -1718,6 +1898,7 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_detail.error
 @team_leaderboard.error
 @team_list.error
+@roulette_russe.error
 @zogquiz_leaderboard.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     if isinstance(error, app_commands.CommandOnCooldown):

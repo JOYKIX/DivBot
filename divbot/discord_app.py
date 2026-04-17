@@ -1859,7 +1859,7 @@ async def team_limit(interaction: discord.Interaction, limit: int) -> None:
     )
 
 
-@team_group.command(name="createprofile", description="Créer les profils DivWar des membres des teams (niveau minimum 1)")
+@team_group.command(name="cp", description="Créer les profils DivWar des membres des teams (niveau minimum 1)")
 @app_commands.check(is_discord_moderator)
 async def team_createprofile(interaction: discord.Interaction) -> None:
     guild = interaction.guild

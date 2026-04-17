@@ -134,6 +134,7 @@ class DiscordBot(discord_commands.Bot):
         self._guild_cache: dict[int, discord.Guild] = {}
         self._text_channel_cache: dict[int, discord.TextChannel] = {}
         self.division_war = DivisionWarSystem()
+        self._team_profiles_initialized = False
 
     def get_cached_guild(self, guild_id: int) -> discord.Guild | None:
         # Optimization: re-use cached guild objects to avoid repeated resolver work.
@@ -177,9 +178,37 @@ class DiscordBot(discord_commands.Bot):
             synced_commands = await self.tree.sync(guild=guild_object)
             print(f"[DISCORD] {len(synced_commands)} commandes slash synchronisées sur {GUILD_ID}")
             self.synced = True
+        if not self._team_profiles_initialized:
+            await self.initialize_team_member_profiles()
+            self._team_profiles_initialized = True
         if self.team_spam_release_task is None or self.team_spam_release_task.done():
             self.team_spam_release_task = asyncio.create_task(self.release_team_spam_members_periodic())
         print(f"[DISCORD] Connecté : {self.user}")
+
+    async def initialize_team_member_profiles(self) -> None:
+        guild = self.get_cached_guild(GUILD_ID)
+        if guild is None:
+            return
+
+        try:
+            await guild.chunk(cache=True)
+        except discord.HTTPException:
+            pass
+
+        created_profiles = 0
+        for member in guild.members:
+            division_role_id = get_primary_team_role_id(member)
+            if division_role_id is None:
+                continue
+            existing_profile = self.division_war.get_member(member.id)
+            self.division_war.get_or_create_member(member.id, division_role_id)
+            if existing_profile is None:
+                created_profiles += 1
+
+        print(
+            "[DIVISION] Profils vérifiés pour les membres en team : "
+            f"{created_profiles} profil(s) créé(s)."
+        )
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         if before.roles == after.roles:

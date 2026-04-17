@@ -279,16 +279,20 @@ class DivisionWarSystem:
         return member2.user_id, member1.user_id, hp_2, hp_1, log
 
     def simulate_division_war(self, team1: DivisionProfile, team2: DivisionProfile) -> DuelResult:
-        """Format duel: le gagnant reste, le perdant est remplacé par le suivant."""
-        queue_1 = [self._build_fighter_state(member) for member in team1.active_members]
-        queue_2 = [self._build_fighter_state(member) for member in team2.active_members]
+        """Format duel: le gagnant reste, le perdant est remplacé par le suivant.
+
+        Important: pour les duels de divisions, tous les membres participent
+        (actifs et inactifs).
+        """
+        queue_1 = [self._build_fighter_state(member) for member in team1.members]
+        queue_2 = [self._build_fighter_state(member) for member in team2.members]
 
         if not queue_1 and not queue_2:
-            return DuelResult(winner_division_id=None, loser_division_id=None, rounds=0, log=["Aucun combattant actif des deux côtés."])
+            return DuelResult(winner_division_id=None, loser_division_id=None, rounds=0, log=["Aucun combattant des deux côtés."])
         if not queue_1:
-            return DuelResult(winner_division_id=team2.division_id, loser_division_id=team1.division_id, rounds=0, log=["Division A sans combattant actif."])
+            return DuelResult(winner_division_id=team2.division_id, loser_division_id=team1.division_id, rounds=0, log=["Division A sans combattant."])
         if not queue_2:
-            return DuelResult(winner_division_id=team1.division_id, loser_division_id=team2.division_id, rounds=0, log=["Division B sans combattant actif."])
+            return DuelResult(winner_division_id=team1.division_id, loser_division_id=team2.division_id, rounds=0, log=["Division B sans combattant."])
 
         idx_1 = 0
         idx_2 = 0

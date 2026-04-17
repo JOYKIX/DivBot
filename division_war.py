@@ -96,6 +96,14 @@ class DuelResult:
     log: list[str]
 
 
+@dataclass(slots=True)
+class FighterState:
+    user_id: int
+    hp: int
+    atk: int
+    source_member: MemberProfile
+
+
 class DivisionWarSystem:
     """Point d'entrée principal du système de guerre de divisions."""
 
@@ -236,76 +244,104 @@ class DivisionWarSystem:
     # ------------------------------------------------------------------
     # Duel entre divisions
     # ------------------------------------------------------------------
-    def simulate_1v1(self, fighter_a: MemberProfile, fighter_b: MemberProfile) -> tuple[int, int, list[str]]:
-        """Retourne (winner_user_id, loser_user_id, combat_log)."""
-        hp_a = fighter_a.hp
-        hp_b = fighter_b.hp
+    def simulate_fight(
+        self,
+        member1: MemberProfile,
+        member2: MemberProfile,
+        *,
+        member1_starting_hp: int | None = None,
+        member2_starting_hp: int | None = None,
+    ) -> tuple[int, int, int, int, list[str]]:
+        """Simule un combat 1v1 et retourne:
+        (winner_user_id, loser_user_id, winner_remaining_hp, loser_remaining_hp, combat_log).
+        """
+        hp_1 = max(0, member1_starting_hp if member1_starting_hp is not None else member1.hp)
+        hp_2 = max(0, member2_starting_hp if member2_starting_hp is not None else member2.hp)
         log: list[str] = []
         turn = 1
 
-        while hp_a > 0 and hp_b > 0:
-            dmg_a = self._roll_damage(fighter_a.atk)
-            hp_b = max(0, hp_b - dmg_a)
-            log.append(f"Tour {turn}: {fighter_a.user_id} inflige {dmg_a} (HP adversaire: {hp_b}).")
-            if hp_b <= 0:
+        while hp_1 > 0 and hp_2 > 0:
+            dmg_1, crit_1 = self._compute_damage(member1.atk)
+            hp_2 = max(0, hp_2 - dmg_1)
+            crit_label_1 = " 💥CRITIQUE!" if crit_1 else ""
+            log.append(f"Tour {turn}: {member1.user_id} inflige {dmg_1}{crit_label_1} (HP adversaire: {hp_2}).")
+            if hp_2 <= 0:
                 break
 
-            dmg_b = self._roll_damage(fighter_b.atk)
-            hp_a = max(0, hp_a - dmg_b)
-            log.append(f"Tour {turn}: {fighter_b.user_id} inflige {dmg_b} (HP adversaire: {hp_a}).")
+            dmg_2, crit_2 = self._compute_damage(member2.atk)
+            hp_1 = max(0, hp_1 - dmg_2)
+            crit_label_2 = " 💥CRITIQUE!" if crit_2 else ""
+            log.append(f"Tour {turn}: {member2.user_id} inflige {dmg_2}{crit_label_2} (HP adversaire: {hp_1}).")
             turn += 1
 
-        if hp_a > 0:
-            return fighter_a.user_id, fighter_b.user_id, log
-        return fighter_b.user_id, fighter_a.user_id, log
+        if hp_1 > 0:
+            return member1.user_id, member2.user_id, hp_1, hp_2, log
+        return member2.user_id, member1.user_id, hp_2, hp_1, log
 
-    def duel_divisions(self, division_a: DivisionProfile, division_b: DivisionProfile) -> DuelResult:
+    def simulate_division_war(self, team1: DivisionProfile, team2: DivisionProfile) -> DuelResult:
         """Format duel: le gagnant reste, le perdant est remplacé par le suivant."""
-        queue_a = [member for member in division_a.active_members]
-        queue_b = [member for member in division_b.active_members]
+        queue_1 = [self._build_fighter_state(member) for member in team1.active_members]
+        queue_2 = [self._build_fighter_state(member) for member in team2.active_members]
 
-        if not queue_a and not queue_b:
+        if not queue_1 and not queue_2:
             return DuelResult(winner_division_id=None, loser_division_id=None, rounds=0, log=["Aucun combattant actif des deux côtés."])
-        if not queue_a:
-            return DuelResult(winner_division_id=division_b.division_id, loser_division_id=division_a.division_id, rounds=0, log=["Division A sans combattant actif."])
-        if not queue_b:
-            return DuelResult(winner_division_id=division_a.division_id, loser_division_id=division_b.division_id, rounds=0, log=["Division B sans combattant actif."])
+        if not queue_1:
+            return DuelResult(winner_division_id=team2.division_id, loser_division_id=team1.division_id, rounds=0, log=["Division A sans combattant actif."])
+        if not queue_2:
+            return DuelResult(winner_division_id=team1.division_id, loser_division_id=team2.division_id, rounds=0, log=["Division B sans combattant actif."])
 
-        idx_a = 0
-        idx_b = 0
+        idx_1 = 0
+        idx_2 = 0
         rounds = 0
         log: list[str] = []
 
-        while idx_a < len(queue_a) and idx_b < len(queue_b):
+        while idx_1 < len(queue_1) and idx_2 < len(queue_2):
             rounds += 1
-            fighter_a = queue_a[idx_a]
-            fighter_b = queue_b[idx_b]
-            winner_user_id, _loser_user_id, fight_log = self.simulate_1v1(fighter_a, fighter_b)
-            log.append(f"Round {rounds}: {fighter_a.user_id} (A) vs {fighter_b.user_id} (B)")
+            fighter_1 = queue_1[idx_1]
+            fighter_2 = queue_2[idx_2]
+            winner_user_id, _loser_user_id, winner_remaining_hp, _loser_remaining_hp, fight_log = self.simulate_fight(
+                fighter_1.source_member,
+                fighter_2.source_member,
+                member1_starting_hp=fighter_1.hp,
+                member2_starting_hp=fighter_2.hp,
+            )
+            log.append(f"Round {rounds}: {fighter_1.user_id} (A) vs {fighter_2.user_id} (B)")
             log.extend(fight_log)
 
-            if winner_user_id == fighter_a.user_id:
-                idx_b += 1  # Le perdant B est remplacé
-                log.append(f" -> Gagnant: {fighter_a.user_id} (A)")
+            if winner_user_id == fighter_1.user_id:
+                fighter_1.hp = winner_remaining_hp
+                idx_2 += 1  # Le perdant B est remplacé
+                log.append(f" -> Gagnant: {fighter_1.user_id} (A) avec {fighter_1.hp} HP restants")
             else:
-                idx_a += 1  # Le perdant A est remplacé
-                log.append(f" -> Gagnant: {fighter_b.user_id} (B)")
+                fighter_2.hp = winner_remaining_hp
+                idx_1 += 1  # Le perdant A est remplacé
+                log.append(f" -> Gagnant: {fighter_2.user_id} (B) avec {fighter_2.hp} HP restants")
 
-        if idx_a >= len(queue_a):
-            winner = division_b.division_id
-            loser = division_a.division_id
+        if idx_1 >= len(queue_1):
+            winner = team2.division_id
+            loser = team1.division_id
         else:
-            winner = division_a.division_id
-            loser = division_b.division_id
+            winner = team1.division_id
+            loser = team2.division_id
 
         return DuelResult(winner_division_id=winner, loser_division_id=loser, rounds=rounds, log=log)
+
+    def duel_divisions(self, division_a: DivisionProfile, division_b: DivisionProfile) -> DuelResult:
+        """Alias de compatibilité avec l'ancienne API."""
+        return self.simulate_division_war(division_a, division_b)
 
     # ------------------------------------------------------------------
     # Helpers internes
     # ------------------------------------------------------------------
-    def _roll_damage(self, atk: int) -> int:
-        factor = self._rng.uniform(self.config.damage_random_factor_min, self.config.damage_random_factor_max)
-        return max(1, int(round(atk * factor)))
+    def _build_fighter_state(self, member: MemberProfile) -> FighterState:
+        return FighterState(user_id=member.user_id, hp=member.hp, atk=member.atk, source_member=member)
+
+    def _compute_damage(self, atk: int) -> tuple[int, bool]:
+        is_critical = self._rng.random() < 0.02
+        base_damage = max(1, atk)
+        if is_critical:
+            return base_damage * 2, True
+        return base_damage, False
 
     def _recompute_member_stats(self, profile: MemberProfile) -> None:
         profile.hp = self.compute_hp(profile.level)

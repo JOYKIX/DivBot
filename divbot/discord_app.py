@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 import time
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal, TypeVar
@@ -174,6 +175,7 @@ class DiscordBot(discord_commands.Bot):
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         if before.roles == after.roles:
             return
+        await enforce_manual_delinquent_punishment(before, after)
         if await enforce_delinquent_team_block(before, after):
             return
         await enforce_single_team_membership(before, after)
@@ -182,6 +184,7 @@ class DiscordBot(discord_commands.Bot):
         if current_member is None:
             return
         await announce_team_joins(before, current_member)
+        await announce_team_departures(before, current_member)
         if team_role_ids_for_member(before) != team_role_ids_for_member(current_member):
             await self.schedule_leaderboard_refresh()
 
@@ -309,6 +312,7 @@ TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 
 TEAM_SPAM_RELEASE_POLL_SECONDS = 30
 ROULETTE_JOIN_WINDOW_SECONDS = 10
 ROULETTE_PUNISHMENT_SECONDS = 60 * 10
+MANUAL_DELINQUENT_PUNISHMENT_SECONDS = 60 * 60 * 24
 TEAM_SPAM_PUNISHMENTS_KEY = "team_spam_punishments"
 team_switch_violations: dict[int, int] = {}
 team_enforcement_locks: dict[int, asyncio.Lock] = {}
@@ -512,6 +516,75 @@ async def clear_delinquent_status(member: discord.Member, *, reason: str) -> boo
         return False
 
     return True
+
+
+def parse_punishment_duration(raw_duration: str) -> int | None:
+    cleaned_value = raw_duration.strip().lower()
+    match = re.fullmatch(r"(\d+)\s*([mh])", cleaned_value)
+    if match is None:
+        return None
+
+    amount = int(match.group(1))
+    if amount <= 0:
+        return None
+
+    unit = match.group(2)
+    if unit == "m":
+        return amount * 60
+    if unit == "h":
+        return amount * 60 * 60
+    return None
+
+
+async def enforce_manual_delinquent_punishment(before: discord.Member, after: discord.Member) -> None:
+    delinquent_role = after.guild.get_role(DELINQUENT_ROLE_ID)
+    if delinquent_role is None:
+        return
+    if delinquent_role in before.roles or delinquent_role not in after.roles:
+        return
+
+    existing_entry = team_spam_punishments["members"].get(str(after.id))
+    if isinstance(existing_entry, dict):
+        return
+
+    bot_member = after.guild.me
+    if bot_member is None:
+        return
+
+    roles_to_remove = [
+        role
+        for role in after.roles
+        if role != after.guild.default_role
+        and role != delinquent_role
+        and role < bot_member.top_role
+    ]
+    if not roles_to_remove:
+        register_team_spam_punishment(
+            after.id,
+            after.guild.id,
+            team_role_id=None,
+            restore_role_ids=[],
+            duration_seconds=MANUAL_DELINQUENT_PUNISHMENT_SECONDS,
+            source="manual_delinquent",
+        )
+        return
+
+    removed_roles: list[discord.Role] = []
+    for role in roles_to_remove:
+        try:
+            await after.remove_roles(role, reason="Attribution manuelle du rôle Délinquant")
+            removed_roles.append(role)
+        except discord.HTTPException:
+            continue
+
+    register_team_spam_punishment(
+        after.id,
+        after.guild.id,
+        team_role_id=None,
+        restore_role_ids=[role.id for role in removed_roles],
+        duration_seconds=MANUAL_DELINQUENT_PUNISHMENT_SECONDS,
+        source="manual_delinquent",
+    )
 
 
 async def refresh_registered_leaderboards() -> None:
@@ -1272,6 +1345,26 @@ async def announce_team_joins(before: discord.Member, current_member: discord.Me
             continue
 
 
+async def announce_team_departures(before: discord.Member, current_member: discord.Member) -> None:
+    current_team_role_ids = team_role_ids_for_member(current_member)
+    departed_team_roles = [
+        role
+        for role in before.roles
+        if get_team_entry_by_role(role) is not None and role.id not in current_team_role_ids
+    ]
+    if not departed_team_roles:
+        return
+
+    for role in departed_team_roles:
+        team_channel = get_team_channel_for_role(current_member.guild, role)
+        if team_channel is None:
+            continue
+        try:
+            await team_channel.send(f"👋 {current_member.mention} a quitté la team **{role.name}**.")
+        except discord.HTTPException:
+            continue
+
+
 @link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")
 async def link_remove(interaction: discord.Interaction) -> None:
     await handle_unlink_request(interaction)
@@ -1773,6 +1866,50 @@ async def team_pardon(interaction: discord.Interaction, member: discord.Member) 
     )
 
 
+@team_group.command(name="punition", description="Mettre un membre en Délinquant pendant une durée personnalisée")
+@app_commands.describe(member="Membre à sanctionner", duration="Durée au format 30m ou 2h")
+@app_commands.check(is_discord_moderator)
+async def team_punition(interaction: discord.Interaction, member: discord.Member, duration: str) -> None:
+    duration_seconds = parse_punishment_duration(duration)
+    if duration_seconds is None:
+        await send_interaction_embed(
+            interaction,
+            "Durée invalide",
+            "Utilise un format comme **30m** ou **2h** (minutes/heures).",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    restore_role_ids = [role.id for role in member.roles if role != member.guild.default_role and role.id != DELINQUENT_ROLE_ID]
+    punished = await apply_temporary_delinquent_punishment(
+        member,
+        duration_seconds=duration_seconds,
+        reason=f"Sanction manuelle via /team punition par {interaction.user}",
+        restore_role_ids=restore_role_ids,
+        source="team_punition",
+    )
+    if not punished:
+        await send_interaction_embed(
+            interaction,
+            "Punition impossible",
+            "Impossible d'appliquer la sanction (rôle Délinquant manquant ou permissions insuffisantes).",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    await send_interaction_embed(
+        interaction,
+        "Punition appliquée",
+        (
+            f"{member.mention} est maintenant **Délinquant** pour **{duration}**.\n"
+            "Tous ses rôles (hors @everyone) ont été retirés et seront restaurés automatiquement."
+        ),
+        SUCCESS_COLOR,
+    )
+
+
 @team_group.command(name="leaderboard", description="Afficher le classement des équipes")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
 async def team_leaderboard(interaction: discord.Interaction) -> None:
@@ -1889,6 +2026,7 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_reset.error
 @team_limit.error
 @team_pardon.error
+@team_punition.error
 @team_captain.error
 @team_motto.error
 @link_panel.error

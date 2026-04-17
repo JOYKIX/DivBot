@@ -1326,6 +1326,9 @@ async def zogquiz_leaderboard(interaction: discord.Interaction) -> None:
 
 
 async def announce_team_joins(before: discord.Member, current_member: discord.Member) -> None:
+    if should_skip_team_membership_announcement(before, current_member):
+        return
+
     before_team_role_ids = team_role_ids_for_member(before)
     joined_team_roles = [
         role
@@ -1346,6 +1349,9 @@ async def announce_team_joins(before: discord.Member, current_member: discord.Me
 
 
 async def announce_team_departures(before: discord.Member, current_member: discord.Member) -> None:
+    if should_skip_team_membership_announcement(before, current_member):
+        return
+
     current_team_role_ids = team_role_ids_for_member(current_member)
     departed_team_roles = [
         role
@@ -1363,6 +1369,13 @@ async def announce_team_departures(before: discord.Member, current_member: disco
             await team_channel.send(f"👋 {current_member.mention} a quitté la team **{role.name}**.")
         except discord.HTTPException:
             continue
+
+
+def should_skip_team_membership_announcement(before: discord.Member, after: discord.Member) -> bool:
+    delinquent_role = after.guild.get_role(DELINQUENT_ROLE_ID)
+    if delinquent_role is None:
+        return False
+    return delinquent_role in before.roles or delinquent_role in after.roles
 
 
 @link_group.command(name="remove", description="Supprimer la liaison avec ton compte Twitch")

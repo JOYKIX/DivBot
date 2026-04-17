@@ -20,6 +20,7 @@ import time
 
 
 NumberFormula = Callable[[int], int]
+UserLabelResolver = Callable[[int], str]
 
 
 @dataclass(slots=True)
@@ -375,12 +376,16 @@ class DivisionWarSystem:
         *,
         member1_starting_hp: int | None = None,
         member2_starting_hp: int | None = None,
+        member1_label: str | None = None,
+        member2_label: str | None = None,
     ) -> tuple[int, int, int, int, list[str]]:
         """Simule un combat 1v1 et retourne:
         (winner_user_id, loser_user_id, winner_remaining_hp, loser_remaining_hp, combat_log).
         """
         hp_1 = max(0, member1_starting_hp if member1_starting_hp is not None else member1.hp)
         hp_2 = max(0, member2_starting_hp if member2_starting_hp is not None else member2.hp)
+        label_1 = member1_label or str(member1.user_id)
+        label_2 = member2_label or str(member2.user_id)
         log: list[str] = []
         turn = 1
 
@@ -388,21 +393,27 @@ class DivisionWarSystem:
             dmg_1, crit_1 = self._compute_damage(member1.atk)
             hp_2 = max(0, hp_2 - dmg_1)
             crit_label_1 = " 💥CRITIQUE!" if crit_1 else ""
-            log.append(f"Tour {turn}: {member1.user_id} inflige {dmg_1}{crit_label_1} (HP adversaire: {hp_2}).")
+            log.append(f"Tour {turn}: {label_1} inflige {dmg_1}{crit_label_1} (HP adversaire: {hp_2}).")
             if hp_2 <= 0:
                 break
 
             dmg_2, crit_2 = self._compute_damage(member2.atk)
             hp_1 = max(0, hp_1 - dmg_2)
             crit_label_2 = " 💥CRITIQUE!" if crit_2 else ""
-            log.append(f"Tour {turn}: {member2.user_id} inflige {dmg_2}{crit_label_2} (HP adversaire: {hp_1}).")
+            log.append(f"Tour {turn}: {label_2} inflige {dmg_2}{crit_label_2} (HP adversaire: {hp_1}).")
             turn += 1
 
         if hp_1 > 0:
             return member1.user_id, member2.user_id, hp_1, hp_2, log
         return member2.user_id, member1.user_id, hp_2, hp_1, log
 
-    def simulate_division_war(self, team1: DivisionProfile, team2: DivisionProfile) -> DuelResult:
+    def simulate_division_war(
+        self,
+        team1: DivisionProfile,
+        team2: DivisionProfile,
+        *,
+        user_label_resolver: UserLabelResolver | None = None,
+    ) -> DuelResult:
         """Duel de divisions (sans notion d'activité): tous les membres combattent."""
         members_1 = self.get_members_by_division(team1.division_id)
         members_2 = self.get_members_by_division(team2.division_id)
@@ -426,23 +437,27 @@ class DivisionWarSystem:
             rounds += 1
             fighter_1 = queue_1[idx_1]
             fighter_2 = queue_2[idx_2]
+            fighter_1_label = user_label_resolver(fighter_1.user_id) if user_label_resolver else str(fighter_1.user_id)
+            fighter_2_label = user_label_resolver(fighter_2.user_id) if user_label_resolver else str(fighter_2.user_id)
             winner_user_id, _loser_user_id, winner_remaining_hp, _loser_remaining_hp, fight_log = self.simulate_fight(
                 fighter_1.source_member,
                 fighter_2.source_member,
                 member1_starting_hp=fighter_1.hp,
                 member2_starting_hp=fighter_2.hp,
+                member1_label=fighter_1_label,
+                member2_label=fighter_2_label,
             )
-            log.append(f"Round {rounds}: {fighter_1.user_id} (A) vs {fighter_2.user_id} (B)")
+            log.append(f"Round {rounds}: {fighter_1_label} (A) vs {fighter_2_label} (B)")
             log.extend(fight_log)
 
             if winner_user_id == fighter_1.user_id:
                 fighter_1.hp = winner_remaining_hp
                 idx_2 += 1
-                log.append(f" -> Gagnant: {fighter_1.user_id} (A) avec {fighter_1.hp} HP restants")
+                log.append(f" -> Gagnant: {fighter_1_label} (A) avec {fighter_1.hp} HP restants")
             else:
                 fighter_2.hp = winner_remaining_hp
                 idx_1 += 1
-                log.append(f" -> Gagnant: {fighter_2.user_id} (B) avec {fighter_2.hp} HP restants")
+                log.append(f" -> Gagnant: {fighter_2_label} (B) avec {fighter_2.hp} HP restants")
 
         if idx_1 >= len(queue_1):
             winner = team2.division_id

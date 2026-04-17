@@ -92,6 +92,78 @@ async def send_interaction_embed(
     await interaction.response.send_message(**send_kwargs)
 
 
+def _division_war_member_label(guild: discord.Guild, user_id: int) -> str:
+    member = guild.get_member(user_id)
+    if member is None:
+        return f"Utilisateur {user_id}"
+    return member.display_name
+
+
+def _build_divwar_embed(
+    *,
+    title: str,
+    summary_lines: list[str],
+    combat_lines: list[str],
+    status_line: str | None = None,
+) -> discord.Embed:
+    lines = list(summary_lines)
+    if status_line:
+        lines.append(status_line)
+    if combat_lines:
+        lines.append("")
+        lines.append("**Résumé du combat**")
+        lines.extend(f"• {line}" for line in combat_lines)
+    return build_embed(title, "\n".join(lines), INFO_COLOR)
+
+
+async def _animate_division_war_message(
+    *,
+    message: discord.Message,
+    summary_lines: list[str],
+    duel_log: list[str],
+) -> None:
+    if not duel_log:
+        await message.edit(embed=_build_divwar_embed(title="⚔️ Résultat du duel de divisions", summary_lines=summary_lines, combat_lines=[]))
+        return
+
+    step_delay_seconds = 1.1
+    max_lines_displayed = 14
+    updates: list[list[str]] = []
+    current_block: list[str] = []
+    for line in duel_log:
+        if line.startswith("Round ") and current_block:
+            updates.append(current_block)
+            current_block = [line]
+            continue
+        current_block.append(line)
+    if current_block:
+        updates.append(current_block)
+
+    streamed_lines: list[str] = []
+    for index, update_block in enumerate(updates, start=1):
+        streamed_lines.extend(update_block)
+        current_preview = streamed_lines[-max_lines_displayed:]
+        in_progress_embed = _build_divwar_embed(
+            title="⚔️ Duel de divisions en direct",
+            summary_lines=summary_lines,
+            combat_lines=current_preview,
+            status_line=f"🟡 **Combat en cours** • Round `{index}/{len(updates)}`",
+        )
+        await message.edit(embed=in_progress_embed)
+        await asyncio.sleep(step_delay_seconds)
+
+    final_preview = streamed_lines[-max_lines_displayed:]
+    if len(streamed_lines) > max_lines_displayed:
+        final_preview.append(f"... ({len(streamed_lines) - max_lines_displayed} événement(s) supplémentaires)")
+    final_embed = _build_divwar_embed(
+        title="⚔️ Résultat du duel de divisions",
+        summary_lines=summary_lines,
+        combat_lines=final_preview,
+        status_line="✅ **Combat terminé**",
+    )
+    await message.edit(embed=final_embed)
+
+
 def division_power_for_role(guild: discord.Guild, role_id: int) -> float:
     role = guild.get_role(role_id)
     role_name = role.name if role is not None else None
@@ -2115,11 +2187,17 @@ async def divwar_command(interaction: discord.Interaction, team1: discord.Role, 
         )
         return
 
+    await interaction.response.defer(thinking=True)
+
     division_1 = discord_bot.division_war.build_division_profile(team1.id, team1.name)
     division_2 = discord_bot.division_war.build_division_profile(team2.id, team2.name)
     division_1_members = discord_bot.division_war.get_members_by_division(team1.id)
     division_2_members = discord_bot.division_war.get_members_by_division(team2.id)
-    duel_result = discord_bot.division_war.simulate_division_war(division_1, division_2)
+    duel_result = discord_bot.division_war.simulate_division_war(
+        division_1,
+        division_2,
+        user_label_resolver=lambda user_id: _division_war_member_label(guild, user_id),
+    )
 
     winner_role = guild.get_role(duel_result.winner_division_id) if duel_result.winner_division_id else None
     winner_label = winner_role.mention if winner_role is not None else "Aucun vainqueur"
@@ -2129,14 +2207,14 @@ async def divwar_command(interaction: discord.Interaction, team1: discord.Role, 
         f"🏁 **Vainqueur** : {winner_label}",
         f"🔁 **Rounds joués** : `{duel_result.rounds}`",
     ]
-    if duel_result.log:
-        summary_lines.append("\n**Résumé du combat**")
-        summary_lines.extend(f"• {line}" for line in duel_result.log[:12])
-        if len(duel_result.log) > 12:
-            summary_lines.append(f"• ... ({len(duel_result.log) - 12} événement(s) supplémentaires)")
-
-    embed = build_embed("⚔️ Résultat du duel de divisions", "\n".join(summary_lines), INFO_COLOR)
-    await interaction.response.send_message(embed=embed, ephemeral=False)
+    live_embed = _build_divwar_embed(
+        title="⚔️ Duel de divisions en direct",
+        summary_lines=summary_lines,
+        combat_lines=[],
+        status_line="🟡 **Préparation du combat...**",
+    )
+    live_message = await interaction.followup.send(embed=live_embed, ephemeral=False, wait=True)
+    await _animate_division_war_message(message=live_message, summary_lines=summary_lines, duel_log=duel_result.log)
 
 
 @team_group.command(name="captain", description="Définir le capitaine d'une team")

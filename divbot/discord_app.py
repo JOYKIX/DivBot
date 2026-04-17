@@ -185,10 +185,10 @@ class DiscordBot(discord_commands.Bot):
             self.team_spam_release_task = asyncio.create_task(self.release_team_spam_members_periodic())
         print(f"[DISCORD] Connecté : {self.user}")
 
-    async def initialize_team_member_profiles(self) -> None:
+    async def initialize_team_member_profiles(self, minimum_level: int = 0) -> tuple[int, int]:
         guild = self.get_cached_guild(GUILD_ID)
         if guild is None:
-            return
+            return (0, 0)
 
         try:
             await guild.chunk(cache=True)
@@ -196,19 +196,26 @@ class DiscordBot(discord_commands.Bot):
             pass
 
         created_profiles = 0
+        leveled_profiles = 0
         for member in guild.members:
             division_role_id = get_primary_team_role_id(member)
             if division_role_id is None:
                 continue
             existing_profile = self.division_war.get_member(member.id)
-            self.division_war.get_or_create_member(member.id, division_role_id)
+            division_member = self.division_war.get_or_create_member(member.id, division_role_id)
             if existing_profile is None:
                 created_profiles += 1
+            if minimum_level > 0 and division_member.level < minimum_level:
+                minimum_xp = int((minimum_level ** 2) * 50)
+                division_member.xp = max(division_member.xp, minimum_xp)
+                self.division_war.recalculate_member_level_and_stats(division_member)
+                leveled_profiles += 1
 
         print(
             "[DIVISION] Profils vérifiés pour les membres en team : "
-            f"{created_profiles} profil(s) créé(s)."
+            f"{created_profiles} profil(s) créé(s), {leveled_profiles} ajusté(s) niveau {minimum_level}+."
         )
+        return (created_profiles, leveled_profiles)
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         if before.roles == after.roles:
@@ -1849,6 +1856,32 @@ async def team_limit(interaction: discord.Interaction, limit: int) -> None:
         "Limite mise à jour",
         f"Nouvelle limite de membres par team : **{team_member_limit_label()}**.",
         SUCCESS_COLOR,
+    )
+
+
+@team_group.command(name="createprofile", description="Créer les profils DivWar des membres des teams (niveau minimum 1)")
+@app_commands.check(is_discord_moderator)
+async def team_createprofile(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+    created_profiles, leveled_profiles = await discord_bot.initialize_team_member_profiles(minimum_level=1)
+    await interaction.followup.send(
+        embed=build_embed(
+            "Profils DivWar synchronisés",
+            (
+                "Tous les membres ayant un rôle de team ont été traités.\n"
+                f"• Profils créés : **{created_profiles}**\n"
+                f"• Profils montés au niveau 1 minimum : **{leveled_profiles}**"
+            ),
+            SUCCESS_COLOR,
+        ),
+        ephemeral=True,
     )
 
 

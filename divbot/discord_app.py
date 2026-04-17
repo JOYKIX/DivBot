@@ -43,6 +43,7 @@ from divbot.team_logic import (
     team_member_limit_label,
     team_overview_embed,
 )
+from division_war import DivisionWarSystem
 
 API_RETRY_BASE_DELAY_SECONDS = 1.0
 API_RETRY_ATTEMPTS = 4
@@ -125,6 +126,7 @@ class DiscordBot(discord_commands.Bot):
         self.leaderboard_refresh_task: asyncio.Task[None] | None = None
         self._guild_cache: dict[int, discord.Guild] = {}
         self._text_channel_cache: dict[int, discord.TextChannel] = {}
+        self.division_war = DivisionWarSystem()
 
     def get_cached_guild(self, guild_id: int) -> discord.Guild | None:
         # Optimization: re-use cached guild objects to avoid repeated resolver work.
@@ -195,6 +197,20 @@ class DiscordBot(discord_commands.Bot):
     async def on_member_join(self, member: discord.Member) -> None:
         if team_role_ids_for_member(member):
             await self.schedule_leaderboard_refresh()
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+
+        if isinstance(message.author, discord.Member):
+            division_role_id = get_primary_team_role_id(message.author)
+            self.division_war.handle_message(
+                user_id=message.author.id,
+                division_id=division_role_id,
+                content=message.content,
+            )
+
+        await self.process_commands(message)
 
     async def release_team_spam_members_periodic(self) -> None:
         while not self.is_closed():
@@ -1025,6 +1041,13 @@ def team_role_ids_for_member(member: discord.Member) -> set[int]:
         for role in member.roles
         if get_team_entry_by_role(role) is not None
     }
+
+
+def get_primary_team_role_id(member: discord.Member) -> int | None:
+    team_role_ids = team_role_ids_for_member(member)
+    if not team_role_ids:
+        return None
+    return next(iter(sorted(team_role_ids)))
 
 
 def get_team_channel_for_role(guild: discord.Guild, role: discord.Role) -> discord.TextChannel | None:
@@ -1968,6 +1991,56 @@ async def team_detail(interaction: discord.Interaction, role: discord.Role) -> N
     if not interaction.response.is_done():
         await interaction.response.defer(thinking=False, ephemeral=is_error_embed)
     await interaction.followup.send(embed=embed, ephemeral=is_error_embed)
+
+
+@team_group.command(name="membres", description="Afficher le niveau et les stats d'un membre")
+@app_commands.describe(member="Membre à consulter (optionnel)")
+async def team_membres(interaction: discord.Interaction, member: discord.Member | None = None) -> None:
+    target_member: discord.Member | None = member
+    if target_member is None and isinstance(interaction.user, discord.Member):
+        target_member = interaction.user
+
+    if target_member is None:
+        await send_interaction_embed(
+            interaction,
+            "Membre introuvable",
+            "Impossible de déterminer le membre à afficher.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    division_war_member = discord_bot.division_war.get_or_create_member(
+        user_id=target_member.id,
+        division_id=get_primary_team_role_id(target_member),
+    )
+    division_war_member.is_active = discord_bot.division_war.is_member_active(division_war_member)
+
+    division_label = "Aucune"
+    if division_war_member.division_id is not None and interaction.guild is not None:
+        division_role = interaction.guild.get_role(division_war_member.division_id)
+        if division_role is not None:
+            division_label = division_role.name
+        else:
+            division_label = str(division_war_member.division_id)
+
+    embed = build_embed(
+        "Stats division",
+        (
+            f"👤 Membre : {target_member.mention}\n"
+            f"🛡️ Division : **{division_label}**\n"
+            f"⭐ XP : **{division_war_member.xp}**\n"
+            f"📈 Niveau : **{division_war_member.level}**\n"
+            f"❤️ HP : **{division_war_member.hp}**\n"
+            f"⚔️ ATK : **{division_war_member.atk}**\n"
+            f"💥 Puissance : **{division_war_member.member_power:.1f}**\n"
+            f"🔥 Actif : **{'Oui' if division_war_member.is_active else 'Non'}**\n"
+            f"💬 Messages récents : **{division_war_member.recent_message_count}**"
+        ),
+        INFO_COLOR,
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 @team_group.command(name="captain", description="Définir le capitaine d'une team")

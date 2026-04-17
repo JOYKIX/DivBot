@@ -1,10 +1,8 @@
 import asyncio
-import json
 import re
 import time
 from collections import defaultdict
 from statistics import mean
-from pathlib import Path
 from typing import Any
 
 import discord
@@ -19,10 +17,8 @@ from divbot.common import (
     cleanup_expired_codes,
     config,
     cooldowns,
-    load_data,
     links,
     pending_codes,
-    save_data,
     save_links,
     save_teams,
     teams,
@@ -42,8 +38,6 @@ def is_twitch_admin(author: Any) -> bool:
 
 
 class TwitchBot(twitch_commands.Bot):
-    ZOGQUIZ_FILE = Path(__file__).resolve().parent / "zogquiz.json"
-
     def __init__(self) -> None:
         super().__init__(
             token=TWITCH_TOKEN,
@@ -51,9 +45,7 @@ class TwitchBot(twitch_commands.Bot):
             initial_channels=[TWITCH_CHANNEL],
         )
         self.active_matchspam: dict[str, Any] | None = None
-        self.active_zogquiz: dict[str, Any] | None = None
         self.active_poll: dict[str, Any] | None = None
-        self.zogquiz_scores: dict[str, int] = self.load_zogquiz_scores()
 
     async def event_ready(self) -> None:
         print(f"[TWITCH] Connecté : {self.nick}")
@@ -69,7 +61,6 @@ class TwitchBot(twitch_commands.Bot):
         msg = message.content
 
         await self.track_matchspam_message(msg)
-        await self.track_zogquiz_message(message)
         await self.track_poll_message(message)
 
         if msg.lower().startswith("!link"):
@@ -124,126 +115,6 @@ class TwitchBot(twitch_commands.Bot):
                 await give_role(discord_id, rule_role)
             elif rule_type == "emote" and message.tags.get("emotes") and rule_value in msg:
                 await give_role(discord_id, rule_role)
-
-    def load_zogquiz_scores(self) -> dict[str, int]:
-        raw_scores = load_data("zogquiz_scores", {"scores": {}})
-        if not isinstance(raw_scores, dict):
-            return {}
-        score_entries = raw_scores.get("scores", {})
-        if not isinstance(score_entries, dict):
-            return {}
-        normalized_scores: dict[str, int] = {}
-        for discord_id, score_value in score_entries.items():
-            cleaned_discord_id = str(discord_id).strip()
-            if not cleaned_discord_id:
-                continue
-            try:
-                score = int(score_value)
-            except (TypeError, ValueError):
-                continue
-            if score < 0:
-                score = 0
-            normalized_scores[cleaned_discord_id] = score
-        return normalized_scores
-
-    def save_zogquiz_scores(self) -> None:
-        save_data("zogquiz_scores", {"scores": self.zogquiz_scores})
-
-    def normalize_zogquiz_answer(self, raw_answer: str) -> str:
-        lowered = raw_answer.strip().lower()
-        lowered = re.sub(r"[^\w\s]", " ", lowered, flags=re.UNICODE)
-        lowered = re.sub(r"\s+", " ", lowered, flags=re.UNICODE)
-        return lowered.strip()
-
-    def load_zogquiz_questions(self) -> list[dict[str, Any]]:
-        if not self.ZOGQUIZ_FILE.exists():
-            return []
-        try:
-            with self.ZOGQUIZ_FILE.open("r", encoding="utf-8") as file:
-                data = json.load(file)
-        except (OSError, json.JSONDecodeError):
-            return []
-
-        if not isinstance(data, list):
-            return []
-
-        loaded_questions: list[dict[str, Any]] = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            question_id = item.get("id")
-            raw_answers = item.get("answers", [])
-            if not isinstance(question_id, int) or question_id < 1:
-                continue
-            if not isinstance(raw_answers, list):
-                continue
-            normalized_answers = {
-                self.normalize_zogquiz_answer(str(answer))
-                for answer in raw_answers
-                if str(answer).strip()
-            }
-            normalized_answers.discard("")
-            if not normalized_answers:
-                continue
-
-            loaded_questions.append(
-                {
-                    "id": question_id,
-                    "answers": normalized_answers,
-                }
-            )
-
-        loaded_questions.sort(key=lambda question: question["id"])
-        return loaded_questions
-
-    async def ask_next_zogquiz_question(self, channel) -> None:
-        if self.active_zogquiz is None:
-            return
-        questions: list[dict[str, Any]] = self.active_zogquiz["questions"]
-        current_index: int = self.active_zogquiz["index"]
-        if current_index >= len(questions):
-            self.active_zogquiz = None
-            await channel.send("🏁 ZogQuiz terminé ! Utilisez `/zogquiz` sur Discord pour voir le classement.")
-            return
-
-        question = questions[current_index]
-        await channel.send(f"❓ ZogQuiz Q{question['id']} : donne la réponse attendue dans le chat.")
-
-    async def track_zogquiz_message(self, message) -> None:
-        if self.active_zogquiz is None:
-            return
-        if message.author is None or not message.content:
-            return
-
-        if message.content.startswith("!"):
-            return
-
-        current_question_index = self.active_zogquiz["index"]
-        questions: list[dict[str, Any]] = self.active_zogquiz["questions"]
-        if current_question_index >= len(questions):
-            return
-
-        question = questions[current_question_index]
-        normalized_message = self.normalize_zogquiz_answer(message.content)
-        if not normalized_message:
-            return
-
-        if normalized_message not in question["answers"]:
-            return
-
-        twitch_username = message.author.name.lower()
-        linked_discord_id = links.get(twitch_username)
-        if linked_discord_id is None:
-            return
-
-        linked_discord_id_str = str(linked_discord_id)
-        self.zogquiz_scores[linked_discord_id_str] = self.zogquiz_scores.get(linked_discord_id_str, 0) + 1
-        self.save_zogquiz_scores()
-        self.active_zogquiz["index"] += 1
-        await message.channel.send(
-            f"✅ {message.author.name} trouve la bonne réponse et gagne 1 point !"
-        )
-        await self.ask_next_zogquiz_question(message.channel)
 
     async def track_poll_message(self, message) -> None:
         if self.active_poll is None:
@@ -621,33 +492,6 @@ class TwitchBot(twitch_commands.Bot):
         )
         await ctx.send(f"✅ SM appliqué : {recap if recap else 'aucun changement de points'}.")
 
-    @twitch_commands.command(name="zogquiz")
-    async def zogquiz_command(self, ctx: twitch_commands.Context) -> None:
-        if not is_twitch_admin(ctx.author):
-            await ctx.send("Seuls le streamer ou les modérateurs peuvent lancer un ZogQuiz.")
-            return
-
-        if self.active_zogquiz is not None:
-            await ctx.send("Un ZogQuiz est déjà en cours.")
-            return
-
-        questions = self.load_zogquiz_questions()
-        if not questions:
-            await ctx.send(
-                "Aucune question ZogQuiz valide (id >= 1) trouvée dans zogquiz.json."
-            )
-            return
-
-        self.active_zogquiz = {
-            "questions": questions,
-            "index": 0,
-        }
-        await ctx.send(
-            f"🧠 ZogQuiz lancé ! {len(questions)} question(s). "
-            "Le premier compte Twitch lié à Discord qui répond juste gagne 1 point."
-        )
-        await self.ask_next_zogquiz_question(ctx.channel)
-
     async def resolve_team_name_reference(self, team_or_user_reference: str) -> str | None:
         normalized_reference = team_or_user_reference.strip()
         if not normalized_reference:
@@ -668,16 +512,21 @@ class TwitchBot(twitch_commands.Bot):
         if discord_id is None:
             return None
 
-        guild = discord_bot.get_guild(GUILD_ID)
+        # Optimization: avoid Discord API fetches for member resolution.
+        war_member = discord_bot.division_war.get_member(discord_id)
+        if war_member is not None and war_member.division_id is not None:
+            for team_name, team_data in teams["teams"].items():
+                role_id = team_data.get("role_id")
+                if isinstance(role_id, int) and role_id == war_member.division_id:
+                    return team_name
+
+        guild = discord_bot.get_cached_guild(GUILD_ID)
         if guild is None:
             return None
 
         member = guild.get_member(discord_id)
         if member is None:
-            try:
-                member = await guild.fetch_member(discord_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                return None
+            return None
 
         for team_name, team_data in teams["teams"].items():
             role_id = team_data.get("role_id")

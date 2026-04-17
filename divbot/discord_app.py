@@ -190,14 +190,28 @@ class DiscordBot(discord_commands.Bot):
         if guild is None:
             return (0, 0)
 
-        try:
-            await guild.chunk(cache=True)
-        except discord.HTTPException:
-            pass
+        # Optimization: avoid a full guild chunk (can be very slow on large servers).
+        # We only need members that currently have a team role.
+        configured_team_role_ids = {
+            team_data.get("role_id")
+            for team_data in teams.get("teams", {}).values()
+            if isinstance(team_data.get("role_id"), int)
+        }
+        team_members: dict[int, discord.Member] = {}
+        for role_id in configured_team_role_ids:
+            role = guild.get_role(role_id)
+            if role is None:
+                continue
+            for member in role.members:
+                team_members[member.id] = member
+
+        # Fallback: if role caches are empty (just after startup/intents delay),
+        # do a standard member scan without forcing chunk.
+        members_to_process = team_members.values() if team_members else guild.members
 
         created_profiles = 0
         leveled_profiles = 0
-        for member in guild.members:
+        for member in members_to_process:
             division_role_id = get_primary_team_role_id(member)
             if division_role_id is None:
                 continue

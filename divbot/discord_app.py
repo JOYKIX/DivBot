@@ -1203,25 +1203,6 @@ team_record_snapshot = snapshot_team_record_state()
 register_team_update_callback(announce_team_record_changes)
 
 
-def get_zogquiz_scores() -> dict[str, int]:
-    raw_data = load_data("zogquiz_scores", {"scores": {}})
-    if not isinstance(raw_data, dict):
-        return {}
-    raw_scores = raw_data.get("scores", {})
-    if not isinstance(raw_scores, dict):
-        return {}
-    normalized_scores: dict[str, int] = {}
-    for discord_id, score_value in raw_scores.items():
-        try:
-            cleaned_score = int(score_value)
-        except (TypeError, ValueError):
-            continue
-        if cleaned_score < 0:
-            cleaned_score = 0
-        normalized_scores[str(discord_id)] = cleaned_score
-    return normalized_scores
-
-
 class RouletteRusseJoinView(discord.ui.View):
     def __init__(self, host_id: int) -> None:
         super().__init__(timeout=ROULETTE_JOIN_WINDOW_SECONDS)
@@ -1324,39 +1305,6 @@ async def roulette_russe(interaction: discord.Interaction) -> None:
                 WARNING_COLOR,
             )
         )
-
-
-@discord_bot.tree.command(name="zogquiz", description="Afficher le classement du ZogQuiz", guild=guild_object)
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
-async def zogquiz_leaderboard(interaction: discord.Interaction) -> None:
-    scores = get_zogquiz_scores()
-    if not scores:
-        await send_interaction_embed(
-            interaction,
-            "Classement ZogQuiz",
-            "Aucun point enregistré pour le moment.",
-            INFO_COLOR,
-            ephemeral=True,
-        )
-        return
-
-    sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    lines: list[str] = []
-    for index, (discord_id, score) in enumerate(sorted_scores, start=1):
-        mention = f"<@{discord_id}>"
-        lines.append(f"**{index}.** {mention} — **{score}** point(s)")
-
-    embed = build_embed(
-        "🏆 Classement ZogQuiz",
-        "\n".join(lines[:20]),
-        INFO_COLOR,
-    )
-    if len(sorted_scores) > 20:
-        embed.set_footer(text=f"{len(sorted_scores)} joueur(s) classé(s) au total.")
-
-    if not interaction.response.is_done():
-        await interaction.response.defer(thinking=False)
-    await interaction.followup.send(embed=embed)
 
 
 async def announce_team_joins(before: discord.Member, current_member: discord.Member) -> None:
@@ -2025,7 +1973,6 @@ async def team_membres(interaction: discord.Interaction, member: discord.Member 
         user_id=target_member.id,
         division_id=get_primary_team_role_id(target_member),
     )
-    division_war_member.is_active = discord_bot.division_war.is_member_active(division_war_member)
 
     division_label = "Aucune"
     if division_war_member.division_id is not None and interaction.guild is not None:
@@ -2034,6 +1981,10 @@ async def team_membres(interaction: discord.Interaction, member: discord.Member 
             division_label = division_role.name
         else:
             division_label = str(division_war_member.division_id)
+    now_timestamp = time.time()
+    seconds_since_last_message = max(0, int(now_timestamp - division_war_member.last_message_timestamp))
+    xp_cooldown_seconds = int(discord_bot.division_war.config.min_seconds_between_xp)
+    xp_ready_in_seconds = max(0, xp_cooldown_seconds - seconds_since_last_message)
 
     embed = build_embed(
         "Stats division",
@@ -2045,8 +1996,8 @@ async def team_membres(interaction: discord.Interaction, member: discord.Member 
             f"❤️ HP : **{division_war_member.hp}**\n"
             f"⚔️ ATK : **{division_war_member.atk}**\n"
             f"💥 Puissance : **{division_war_member.member_power:.1f}**\n"
-            f"🔥 Actif : **{'Oui' if division_war_member.is_active else 'Non'}**\n"
-            f"💬 Messages récents : **{division_war_member.recent_message_count}**"
+            f"⏱️ Dernier message comptabilisé : **il y a {seconds_since_last_message}s**\n"
+            f"🧪 XP disponible dans : **{xp_ready_in_seconds}s**"
         ),
         INFO_COLOR,
     )
@@ -2090,13 +2041,15 @@ async def divwar_command(interaction: discord.Interaction, team1: discord.Role, 
 
     division_1 = discord_bot.division_war.build_division_profile(team1.id, team1.name)
     division_2 = discord_bot.division_war.build_division_profile(team2.id, team2.name)
+    division_1_members = discord_bot.division_war.get_members_by_division(team1.id)
+    division_2_members = discord_bot.division_war.get_members_by_division(team2.id)
     duel_result = discord_bot.division_war.simulate_division_war(division_1, division_2)
 
     winner_role = guild.get_role(duel_result.winner_division_id) if duel_result.winner_division_id else None
     winner_label = winner_role.mention if winner_role is not None else "Aucun vainqueur"
     summary_lines = [
-        f"🛡️ **{team1.mention}** • Puissance: `{division_1.division_power:.1f}` • Membres: `{len(division_1.members)}`",
-        f"🛡️ **{team2.mention}** • Puissance: `{division_2.division_power:.1f}` • Membres: `{len(division_2.members)}`",
+        f"🛡️ **{team1.mention}** • Puissance: `{division_1.division_power:.1f}` • Membres: `{len(division_1_members)}`",
+        f"🛡️ **{team2.mention}** • Puissance: `{division_2.division_power:.1f}` • Membres: `{len(division_2_members)}`",
         f"🏁 **Vainqueur** : {winner_label}",
         f"🔁 **Rounds joués** : `{duel_result.rounds}`",
     ]
@@ -2190,7 +2143,6 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_leaderboard.error
 @team_list.error
 @roulette_russe.error
-@zogquiz_leaderboard.error
 async def admin_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     if isinstance(error, app_commands.CommandOnCooldown):
         await send_interaction_embed(interaction, "Cooldown", f"Réessaie dans {error.retry_after:.1f}s.", WARNING_COLOR, ephemeral=True)

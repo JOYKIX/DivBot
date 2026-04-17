@@ -46,7 +46,6 @@ DATA_DEFAULTS: dict[str, Any] = {
     "config": {"rules": [], "max_team_members": 0, "loser_gif_urls": []},
     "leaderboard": {"channels": {}},
     "team_spam_punishments": {"members": {}},
-    "zogquiz_scores": {"scores": {}},
 }
 FIREBASE_CREDENTIALS_PATH = BASE_DIR / "firebase" / "zogbot-firebase.json"
 FIREBASE_DATABASE_URL = os.getenv(

@@ -92,6 +92,13 @@ async def send_interaction_embed(
     await interaction.response.send_message(**send_kwargs)
 
 
+def division_power_for_role(guild: discord.Guild, role_id: int) -> float:
+    role = guild.get_role(role_id)
+    role_name = role.name if role is not None else None
+    division_profile = discord_bot.division_war.build_division_profile(role_id, role_name)
+    return division_profile.division_power
+
+
 def is_discord_moderator(interaction: discord.Interaction) -> bool:
     member = interaction.user
     if not isinstance(member, discord.Member):
@@ -627,7 +634,9 @@ async def refresh_registered_leaderboards() -> None:
             continue
 
         try:
-            await run_discord_request(lambda: message.edit(embed=leaderboard_embed(guild)))
+            await run_discord_request(
+                lambda: message.edit(embed=leaderboard_embed(guild, lambda role_id: division_power_for_role(guild, role_id)))
+            )
         except (discord.NotFound, discord.Forbidden):
             clear_leaderboard_registration(channel_id)
             leaderboard_messages.pop(message_id, None)
@@ -688,7 +697,9 @@ async def ensure_leaderboard_channel_message(channel_id: int) -> None:
     if channel is None:
         return
 
-    sent_message = await run_discord_request(lambda: channel.send(embed=leaderboard_embed(channel.guild)))
+    sent_message = await run_discord_request(
+        lambda: channel.send(embed=leaderboard_embed(channel.guild, lambda role_id: division_power_for_role(channel.guild, role_id)))
+    )
     register_leaderboard_message(sent_message)
 
 
@@ -1954,7 +1965,7 @@ async def team_leaderboard(interaction: discord.Interaction) -> None:
         await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
         return
 
-    embed = leaderboard_embed(guild)
+    embed = leaderboard_embed(guild, lambda role_id: division_power_for_role(guild, role_id))
     # Optimization: defer once, then send one follow-up (avoids extra original_response fetch call).
     if not interaction.response.is_done():
         await interaction.response.defer(thinking=False)
@@ -1986,7 +1997,7 @@ async def team_detail(interaction: discord.Interaction, role: discord.Role) -> N
         await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
         return
 
-    embed = team_detail_embed(guild, role)
+    embed = team_detail_embed(guild, role, lambda role_id: division_power_for_role(guild, role_id))
     is_error_embed = embed.title == "Équipe introuvable"
     if not interaction.response.is_done():
         await interaction.response.defer(thinking=False, ephemeral=is_error_embed)
@@ -2040,6 +2051,62 @@ async def team_membres(interaction: discord.Interaction, member: discord.Member 
         INFO_COLOR,
     )
 
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+@discord_bot.tree.command(name="divwar", description="Lancer un duel entre deux divisions", guild=guild_object)
+@app_commands.describe(team1="Première division", team2="Deuxième division")
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
+async def divwar_command(interaction: discord.Interaction, team1: discord.Role, team2: discord.Role) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
+        return
+
+    if team1.id == team2.id:
+        await send_interaction_embed(
+            interaction,
+            "Paramètres invalides",
+            "Choisis deux divisions différentes pour lancer un duel.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    missing_divisions: list[str] = []
+    if get_team_entry_by_role(team1) is None:
+        missing_divisions.append(team1.mention)
+    if get_team_entry_by_role(team2) is None:
+        missing_divisions.append(team2.mention)
+    if missing_divisions:
+        await send_interaction_embed(
+            interaction,
+            "Division introuvable",
+            f"Division(s) non enregistrée(s) : {', '.join(missing_divisions)}.",
+            ERROR_COLOR,
+            ephemeral=True,
+        )
+        return
+
+    division_1 = discord_bot.division_war.build_division_profile(team1.id, team1.name)
+    division_2 = discord_bot.division_war.build_division_profile(team2.id, team2.name)
+    duel_result = discord_bot.division_war.simulate_division_war(division_1, division_2)
+
+    winner_role = guild.get_role(duel_result.winner_division_id) if duel_result.winner_division_id else None
+    winner_label = winner_role.mention if winner_role is not None else "Aucun vainqueur"
+    summary_lines = [
+        f"🛡️ **{team1.mention}** • Puissance: `{division_1.division_power:.1f}` • Actifs: `{len(division_1.active_members)}`",
+        f"🛡️ **{team2.mention}** • Puissance: `{division_2.division_power:.1f}` • Actifs: `{len(division_2.active_members)}`",
+        f"🏁 **Vainqueur** : {winner_label}",
+        f"🔁 **Rounds joués** : `{duel_result.rounds}`",
+    ]
+    if duel_result.log:
+        summary_lines.append("\n**Résumé du combat**")
+        summary_lines.extend(f"• {line}" for line in duel_result.log[:12])
+        if len(duel_result.log) > 12:
+            summary_lines.append(f"• ... ({len(duel_result.log) - 12} événement(s) supplémentaires)")
+
+    embed = build_embed("⚔️ Résultat du duel de divisions", "\n".join(summary_lines), INFO_COLOR)
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
 

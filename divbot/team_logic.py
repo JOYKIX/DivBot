@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import discord
 
@@ -106,7 +106,10 @@ def build_embed(title: str, description: str, color: discord.Color) -> discord.E
     return discord.Embed(title=title, description=description, color=color)
 
 
-def leaderboard_embed(guild: discord.Guild) -> discord.Embed:
+def leaderboard_embed(
+    guild: discord.Guild,
+    division_power_lookup: Callable[[int], float] | None = None,
+) -> discord.Embed:
     sorted_teams = sorted(
         teams["teams"].items(),
         key=lambda item: (item[1]["points"], item[1]["wins"]),
@@ -130,6 +133,7 @@ def leaderboard_embed(guild: discord.Guild) -> discord.Embed:
         ranking_lines.append(
             f"{placement_emoji(index)} **#{index} • {data['emoji']} {role.mention}**\n"
             f"└ `Points: {data['points']}` • `W/L: {data['wins']}/{data['losses']}` • `Winrate: {team_winrate(data):.1f}%` • `Membres: {len(role.members)}`"
+            f" • `Puissance: {(division_power_lookup(role.id) if division_power_lookup else 0.0):.1f}`"
         )
 
     if not ranking_lines:
@@ -195,7 +199,11 @@ def team_overview_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 
-def team_detail_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed:
+def team_detail_embed(
+    guild: discord.Guild,
+    role: discord.Role,
+    division_power_lookup: Callable[[int], float] | None = None,
+) -> discord.Embed:
     team_entry = get_team_entry_by_role(role)
     if team_entry is None:
         return build_embed("Équipe introuvable", "Cette team n'est pas enregistrée.", ERROR_COLOR)
@@ -219,6 +227,8 @@ def team_detail_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed
     embed.add_field(name="Victoires", value=f"`{data['wins']}`", inline=True)
     embed.add_field(name="Défaites", value=f"`{data['losses']}`", inline=True)
     embed.add_field(name="Winrate", value=f"`{team_winrate(data):.1f}%`", inline=True)
+    division_power = division_power_lookup(role.id) if division_power_lookup else 0.0
+    embed.add_field(name="Puissance d'équipe", value=f"`{division_power:.1f}`", inline=True)
     embed.add_field(name="Staff", value=team_staff_mentions(guild, data), inline=False)
     embed.add_field(name="Membres", value=members_value, inline=False)
     embed.set_footer(text="Commandes utiles : /team • /setteammotto")

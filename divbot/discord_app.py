@@ -2095,8 +2095,8 @@ async def divwar_command(interaction: discord.Interaction, team1: discord.Role, 
     winner_role = guild.get_role(duel_result.winner_division_id) if duel_result.winner_division_id else None
     winner_label = winner_role.mention if winner_role is not None else "Aucun vainqueur"
     summary_lines = [
-        f"🛡️ **{team1.mention}** • Puissance: `{division_1.division_power:.1f}` • Actifs: `{len(division_1.active_members)}`",
-        f"🛡️ **{team2.mention}** • Puissance: `{division_2.division_power:.1f}` • Actifs: `{len(division_2.active_members)}`",
+        f"🛡️ **{team1.mention}** • Puissance: `{division_1.division_power:.1f}` • Membres: `{len(division_1.members)}`",
+        f"🛡️ **{team2.mention}** • Puissance: `{division_2.division_power:.1f}` • Membres: `{len(division_2.members)}`",
         f"🏁 **Vainqueur** : {winner_label}",
         f"🔁 **Rounds joués** : `{duel_result.rounds}`",
     ]

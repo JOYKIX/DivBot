@@ -243,6 +243,7 @@ class DiscordBot(discord_commands.Bot):
         self.tree.add_command(link_group, guild=guild_object)
         self.tree.add_command(rule_group, guild=guild_object)
         self.tree.add_command(team_group, guild=guild_object)
+        self.tree.add_command(pardon, guild=guild_object)
         self.add_view(LinkAccountView())
 
     async def on_ready(self) -> None:
@@ -498,19 +499,28 @@ async def restore_member_after_team_spam(
     member_id: int,
     team_role_id: int | None,
     restore_role_ids: list[int] | None = None,
-) -> None:
+) -> bool:
     guild = discord_bot.get_cached_guild(guild_id)
     if guild is None:
-        return
+        return False
 
     member = guild.get_member(member_id)
     if member is None:
-        return
+        try:
+            member = await guild.fetch_member(member_id)
+        except discord.HTTPException:
+            return False
 
     delinquent_role = guild.get_role(DELINQUENT_ROLE_ID)
+    bot_member = guild.me
+    if bot_member is None:
+        return False
+
+    restored_anything = False
     try:
-        if delinquent_role is not None and delinquent_role in member.roles:
+        if delinquent_role is not None and delinquent_role in member.roles and delinquent_role < bot_member.top_role:
             await member.remove_roles(delinquent_role, reason="Fin de sanction pour spam de changement de team")
+            restored_anything = True
 
         role_ids = restore_role_ids
         if role_ids is None:
@@ -522,13 +532,16 @@ async def restore_member_after_team_spam(
         roles_to_restore = []
         for role_id in role_ids:
             role = guild.get_role(role_id)
-            if role is not None and role not in member.roles:
+            if role is not None and role not in member.roles and not role.managed and role < bot_member.top_role:
                 roles_to_restore.append(role)
 
         if roles_to_restore:
-            await member.add_roles(*roles_to_restore, reason="Fin de sanction pour spam de changement de team")
+            for role in roles_to_restore:
+                await member.add_roles(role, reason="Fin de sanction pour spam de changement de team")
+            restored_anything = True
     except discord.HTTPException:
-        pass
+        return False
+    return True
 
 
 def persist_team_spam_punishments() -> None:
@@ -546,11 +559,23 @@ async def apply_temporary_delinquent_punishment(
     delinquent_role = member.guild.get_role(DELINQUENT_ROLE_ID)
     if delinquent_role is None:
         return False
+    bot_member = member.guild.me
+    if bot_member is None:
+        return False
+    if not member.guild.me.guild_permissions.manage_roles:
+        return False
+    if delinquent_role >= bot_member.top_role:
+        return False
 
-    roles_to_remove = [role for role in member.roles if role.id in set(restore_role_ids)]
+    role_ids_to_remove = set(restore_role_ids)
+    roles_to_remove = [
+        role
+        for role in member.roles
+        if role.id in role_ids_to_remove and not role.managed and role < bot_member.top_role
+    ]
     try:
-        if roles_to_remove:
-            await member.remove_roles(*roles_to_remove, reason=reason)
+        for role in roles_to_remove:
+            await member.remove_roles(role, reason=reason)
         if delinquent_role not in member.roles:
             await member.add_roles(delinquent_role, reason=reason)
     except discord.HTTPException:
@@ -642,7 +667,10 @@ async def release_due_team_spam_members() -> None:
         except ValueError:
             member_id_int = 0
         if guild_id > 0 and member_id_int > 0:
-            await restore_member_after_team_spam(guild_id, member_id_int, team_role_id, restore_role_ids or None)
+            restored = await restore_member_after_team_spam(guild_id, member_id_int, team_role_id, restore_role_ids or None)
+            if restored:
+                team_spam_punishments["members"].pop(member_id, None)
+            continue
         team_spam_punishments["members"].pop(member_id, None)
 
     persist_team_spam_punishments()
@@ -1975,18 +2003,42 @@ async def team_createprofile(interaction: discord.Interaction) -> None:
     )
 
 
-@team_group.command(name="pardon", description="Retirer le rôle Délinquant d'un membre")
+@app_commands.command(name="pardon", description="Retirer le rôle Délinquant et restaurer les rôles d'un membre")
 @app_commands.describe(member="Membre à libérer de la sanction Délinquant")
 @app_commands.check(is_discord_moderator)
-async def team_pardon(interaction: discord.Interaction, member: discord.Member) -> None:
-    removed = await clear_delinquent_status(member, reason=f"Retrait manuel via /team pardon par {interaction.user}")
+async def pardon(interaction: discord.Interaction, member: discord.Member) -> None:
+    punishment_entry = team_spam_punishments["members"].get(str(member.id))
+    restore_role_ids: list[int] = []
+    if isinstance(punishment_entry, dict):
+        raw_restore_role_ids = punishment_entry.get("restore_role_ids", [])
+        if isinstance(raw_restore_role_ids, list):
+            for role_id in raw_restore_role_ids:
+                try:
+                    restore_role_ids.append(int(role_id))
+                except (TypeError, ValueError):
+                    continue
+
+    restored = False
+    if restore_role_ids:
+        restored = await restore_member_after_team_spam(
+            member.guild.id,
+            member.id,
+            team_role_id=None,
+            restore_role_ids=restore_role_ids,
+        )
+
+    removed = await clear_delinquent_status(member, reason=f"Retrait manuel via /pardon par {interaction.user}")
     team_switch_violations.pop(member.id, None)
     had_punishment_entry = team_spam_punishments["members"].pop(str(member.id), None) is not None
     if had_punishment_entry:
         persist_team_spam_punishments()
 
-    if removed:
-        details = [f"{member.mention} n'a plus le rôle **Délinquant**."]
+    if removed or restored:
+        details = [f"{member.mention} est pardonné."]
+        if removed:
+            details.append("Le rôle **Délinquant** a été retiré.")
+        if restored:
+            details.append("Les rôles enregistrés lors de la punition ont été restaurés.")
         if had_punishment_entry:
             details.append("Sa sanction programmée a aussi été retirée.")
         await send_interaction_embed(interaction, "Membre pardonné", "\n".join(details), SUCCESS_COLOR)
@@ -2289,7 +2341,7 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_record.error
 @team_reset.error
 @team_limit.error
-@team_pardon.error
+@pardon.error
 @team_punition.error
 @team_captain.error
 @team_motto.error

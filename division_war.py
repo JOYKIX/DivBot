@@ -481,9 +481,15 @@ class DivisionWarSystem:
     def _compute_damage(self, atk: int) -> tuple[int, bool]:
         is_critical = self._rng.random() < 0.02
         base_damage = max(1, atk)
+        random_min = float(self.config.damage_random_factor_min)
+        random_max = float(self.config.damage_random_factor_max)
+        if random_min > random_max:
+            random_min, random_max = random_max, random_min
+        damage_multiplier = self._rng.uniform(random_min, random_max)
+        randomized_damage = max(1, int(round(base_damage * damage_multiplier)))
         if is_critical:
-            return base_damage * 2, True
-        return base_damage, False
+            return randomized_damage * 2, True
+        return randomized_damage, False
 
 
 # ----------------------------------------------------------------------

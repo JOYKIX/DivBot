@@ -21,7 +21,7 @@ def get_team_entry_by_name(team_name: str) -> tuple[str, dict[str, Any]] | None:
         (
             (stored_name, data)
             for stored_name, data in teams["teams"].items()
-            if stored_name == normalized_name
+            if str(stored_name).strip().lower() == normalized_name
         ),
         None,
     )
@@ -32,7 +32,10 @@ def get_team_entry_by_role(role: discord.Role) -> tuple[str, dict[str, Any]] | N
 
 
 def get_team_role(guild: discord.Guild, team_data: dict[str, Any]) -> discord.Role | None:
-    return guild.get_role(team_data["role_id"])
+    role_id = team_data.get("role_id")
+    if not isinstance(role_id, int):
+        return None
+    return guild.get_role(role_id)
 
 
 def team_staff_mentions(guild: discord.Guild, team_data: dict[str, Any]) -> str:
@@ -59,7 +62,10 @@ def format_member_list(role: discord.Role) -> str:
 
 
 def current_team_member_limit() -> int:
-    return int(config.get("max_team_members", 0))
+    try:
+        return max(0, int(config.get("max_team_members", 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def team_member_limit_label() -> str:
@@ -70,11 +76,12 @@ def team_member_limit_label() -> str:
 
 
 def format_rules() -> str:
-    if not config["rules"]:
+    rules = config.get("rules", [])
+    if not rules:
         return f"Aucune règle configurée pour le moment.\nLimite de membres par team : **{team_member_limit_label()}**."
 
     lines = []
-    for index, rule in enumerate(config["rules"]):
+    for index, rule in enumerate(rules):
         lines.append(f"`{index}` • **{rule['type']}** → `{rule['value']}` → **{rule['role']}**")
     lines.append(f"\nLimite de membres par team : **{team_member_limit_label()}**.")
     return "\n".join(lines)

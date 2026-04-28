@@ -959,7 +959,11 @@ async def give_role(discord_id: int, role_name: str) -> bool:
     if not member:
         return False
 
-    role = discord.utils.get(guild.roles, name=role_name)
+    normalized_role_name = role_name.strip().lower()
+    if normalized_role_name in {"délinquant", "delinquant"}:
+        role = guild.get_role(DELINQUENT_ROLE_ID)
+    else:
+        role = discord.utils.get(guild.roles, name=role_name)
     if not role:
         return False
 

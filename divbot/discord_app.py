@@ -546,11 +546,23 @@ async def apply_temporary_delinquent_punishment(
     delinquent_role = member.guild.get_role(DELINQUENT_ROLE_ID)
     if delinquent_role is None:
         return False
+    bot_member = member.guild.me
+    if bot_member is None:
+        return False
+    if not member.guild.me.guild_permissions.manage_roles:
+        return False
+    if delinquent_role >= bot_member.top_role:
+        return False
 
-    roles_to_remove = [role for role in member.roles if role.id in set(restore_role_ids)]
+    role_ids_to_remove = set(restore_role_ids)
+    roles_to_remove = [
+        role
+        for role in member.roles
+        if role.id in role_ids_to_remove and not role.managed and role < bot_member.top_role
+    ]
     try:
-        if roles_to_remove:
-            await member.remove_roles(*roles_to_remove, reason=reason)
+        for role in roles_to_remove:
+            await member.remove_roles(role, reason=reason)
         if delinquent_role not in member.roles:
             await member.add_roles(delinquent_role, reason=reason)
     except discord.HTTPException:

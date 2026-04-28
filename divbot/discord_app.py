@@ -244,6 +244,7 @@ class DiscordBot(discord_commands.Bot):
         self.tree.add_command(rule_group, guild=guild_object)
         self.tree.add_command(team_group, guild=guild_object)
         self.tree.add_command(pardon, guild=guild_object)
+        self.tree.add_command(punition, guild=guild_object)
         self.add_view(LinkAccountView())
 
     async def on_ready(self) -> None:
@@ -455,7 +456,7 @@ DELINQUENT_ROLE_ID = 1487122699275862099
 TEAM_SPAM_RESTORE_ROLE_ID = 1158378155489366106
 TEAM_SWITCH_SPAM_THRESHOLD = 3
 TEAM_SPAM_RESTORE_DELAY_SECONDS = 60 * 60 * 24  # 24h en production : 60 * 60 * 24
-TEAM_SPAM_RELEASE_POLL_SECONDS = 30
+TEAM_SPAM_RELEASE_POLL_SECONDS = 60
 ROULETTE_JOIN_WINDOW_SECONDS = 10
 ROULETTE_PUNISHMENT_SECONDS = 60 * 10
 MANUAL_DELINQUENT_PUNISHMENT_SECONDS = 60 * 60 * 24
@@ -2065,10 +2066,10 @@ async def pardon(interaction: discord.Interaction, member: discord.Member) -> No
     )
 
 
-@team_group.command(name="punition", description="Mettre un membre en Délinquant pendant une durée personnalisée")
+@app_commands.command(name="punition", description="Mettre un membre en Délinquant pendant une durée personnalisée")
 @app_commands.describe(member="Membre à sanctionner", duration="Durée au format 30m ou 2h")
 @app_commands.check(is_discord_moderator)
-async def team_punition(interaction: discord.Interaction, member: discord.Member, duration: str) -> None:
+async def punition(interaction: discord.Interaction, member: discord.Member, duration: str) -> None:
     duration_seconds = parse_punishment_duration(duration)
     if duration_seconds is None:
         await send_interaction_embed(
@@ -2084,9 +2085,9 @@ async def team_punition(interaction: discord.Interaction, member: discord.Member
     punished = await apply_temporary_delinquent_punishment(
         member,
         duration_seconds=duration_seconds,
-        reason=f"Sanction manuelle via /team punition par {interaction.user}",
+        reason=f"Sanction manuelle via /punition par {interaction.user}",
         restore_role_ids=restore_role_ids,
-        source="team_punition",
+        source="punition",
     )
     if not punished:
         await send_interaction_embed(
@@ -2342,7 +2343,7 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_reset.error
 @team_limit.error
 @pardon.error
-@team_punition.error
+@punition.error
 @team_captain.error
 @team_motto.error
 @link_panel.error

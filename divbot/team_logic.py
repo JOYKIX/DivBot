@@ -115,6 +115,20 @@ def team_month_wins(team_data: dict[str, Any], month: int | None = None) -> int:
         return 0
 
 
+def team_total_wins(team_data: dict[str, Any]) -> int:
+    monthly_wins = team_data.get("monthly_wins", {})
+    if not isinstance(monthly_wins, dict):
+        return 0
+
+    total_wins = 0
+    for wins in monthly_wins.values():
+        try:
+            total_wins += max(0, int(wins))
+        except (TypeError, ValueError):
+            continue
+    return total_wins
+
+
 def team_motto(team_data: dict[str, Any]) -> str:
     motto = str(team_data.get("motto", "")).strip()
     return motto if motto else "Aucune devise définie."
@@ -130,7 +144,7 @@ def leaderboard_embed(
 ) -> discord.Embed:
     sorted_teams = sorted(
         teams["teams"].items(),
-        key=lambda item: (item[1]["points"], team_month_wins(item[1])),
+        key=lambda item: (item[1]["points"], team_total_wins(item[1])),
         reverse=True,
     )
 
@@ -150,7 +164,7 @@ def leaderboard_embed(
             continue
         ranking_lines.append(
             f"{placement_emoji(index)} **#{index} • {data['emoji']} {role.mention}**\n"
-            f"└ `Points: {data['points']}` • `Victoires mois {current_month()}: {team_month_wins(data)}` • `Membres: {len(role.members)}`"
+            f"└ `Points: {data['points']}` • `Victoires totales: {team_total_wins(data)}` • `Membres: {len(role.members)}`"
             f" • `Puissance: {(division_power_lookup(role.id) if division_power_lookup else 0.0):.1f}`"
         )
 
@@ -169,8 +183,7 @@ def leaderboard_embed(
         name="📌 Focus",
         value=(
             f"**Top team actuelle** : {best_team_data['emoji']} {best_team_label}\n"
-            f"**Mois actuel** : `Mois {current_month()}`\n"
-            f"**Victoires du mois** : `{team_month_wins(best_team_data)}`"
+            f"**Victoires totales** : `{team_total_wins(best_team_data)}`"
         ),
         inline=False,
     )

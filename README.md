@@ -22,7 +22,7 @@ Le code est maintenant séparé en modules simples :
 - réponses propres avec des **embeds** ;
 - **commandes slash** synchronisées sur le serveur (`GUILD_ID`) ;
 - vue détaillée des équipes avec membres + bilan victoires/défaites ;
-- leaderboard avec podium, winrate et focus de la meilleure équipe ;
+- leaderboard avec podium et focus de la meilleure équipe ;
 - gestion des rôles d'encadrement d'équipe (capitaine / vice-capitaine) ;
 - panneau de liaison via bouton **Link Discord ↔ Twitch**.
 
@@ -45,7 +45,6 @@ Le code est maintenant séparé en modules simples :
 - `/team edit`
 - `/team motto`
 - `/team points`
-- `/team record`
 - `/team reset`
 - `/team limit`
 - `/team pardon`

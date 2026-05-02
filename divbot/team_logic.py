@@ -97,11 +97,22 @@ def placement_emoji(position: int) -> str:
     return "🏅"
 
 
-def team_winrate(team_data: dict[str, Any]) -> float:
-    total_matches = team_data["wins"] + team_data["losses"]
-    if total_matches <= 0:
-        return 0.0
-    return (team_data["wins"] / total_matches) * 100
+def current_month() -> int:
+    try:
+        return max(1, int(config.get("current_month", 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def team_month_wins(team_data: dict[str, Any], month: int | None = None) -> int:
+    target_month = str(month if month is not None else current_month())
+    monthly_wins = team_data.get("monthly_wins", {})
+    if not isinstance(monthly_wins, dict):
+        return 0
+    try:
+        return max(0, int(monthly_wins.get(target_month, 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def team_motto(team_data: dict[str, Any]) -> str:
@@ -119,7 +130,7 @@ def leaderboard_embed(
 ) -> discord.Embed:
     sorted_teams = sorted(
         teams["teams"].items(),
-        key=lambda item: (item[1]["points"], item[1]["wins"]),
+        key=lambda item: (item[1]["points"], team_month_wins(item[1])),
         reverse=True,
     )
 
@@ -139,7 +150,7 @@ def leaderboard_embed(
             continue
         ranking_lines.append(
             f"{placement_emoji(index)} **#{index} • {data['emoji']} {role.mention}**\n"
-            f"└ `Points: {data['points']}` • `W/L: {data['wins']}/{data['losses']}` • `Winrate: {team_winrate(data):.1f}%` • `Membres: {len(role.members)}`"
+            f"└ `Points: {data['points']}` • `Victoires mois {current_month()}: {team_month_wins(data)}` • `Membres: {len(role.members)}`"
             f" • `Puissance: {(division_power_lookup(role.id) if division_power_lookup else 0.0):.1f}`"
         )
 
@@ -158,7 +169,8 @@ def leaderboard_embed(
         name="📌 Focus",
         value=(
             f"**Top team actuelle** : {best_team_data['emoji']} {best_team_label}\n"
-            f"**Bilan** : `{best_team_data['wins']} victoire(s)` / `{best_team_data['losses']} défaite(s)`"
+            f"**Mois actuel** : `Mois {current_month()}`\n"
+            f"**Victoires du mois** : `{team_month_wins(best_team_data)}`"
         ),
         inline=False,
     )
@@ -178,7 +190,7 @@ def team_overview_embed(guild: discord.Guild) -> discord.Embed:
 
     sorted_teams = sorted(
         teams["teams"].items(),
-        key=lambda item: (item[1]["points"], item[1]["wins"]),
+        key=lambda item: (item[1]["points"], team_month_wins(item[1])),
         reverse=True,
     )
 
@@ -192,8 +204,8 @@ def team_overview_embed(guild: discord.Guild) -> discord.Embed:
             value=(
                 f"**BLASON**\n{data['emoji']} {data['emoji']} {data['emoji']}\n"
                 f"**Devise** : *{team_motto(data)}*\n"
-                f"**Points** : `{data['points']}` • **Winrate** : `{team_winrate(data):.1f}%`\n"
-                f"**Bilan** : `{data['wins']}V / {data['losses']}D` • **Membres** : `{len(role.members)}`\n"
+                f"**Points** : `{data['points']}` • **Victoires mois {current_month()}** : `{team_month_wins(data)}`\n"
+                f"**Membres** : `{len(role.members)}`\n"
                 f"**Staff** :\n{team_staff_mentions(guild, data)}\n"
                 f"**Roster** : {format_member_list(role)}"
             ),
@@ -231,9 +243,7 @@ def team_detail_embed(
     embed.add_field(name="Rôle Discord", value=role.mention, inline=True)
     embed.add_field(name="Effectif", value=f"`{len(role.members)}`", inline=True)
     embed.add_field(name="Points", value=f"`{data['points']}`", inline=True)
-    embed.add_field(name="Victoires", value=f"`{data['wins']}`", inline=True)
-    embed.add_field(name="Défaites", value=f"`{data['losses']}`", inline=True)
-    embed.add_field(name="Winrate", value=f"`{team_winrate(data):.1f}%`", inline=True)
+    embed.add_field(name=f"Victoires mois {current_month()}", value=f"`{team_month_wins(data)}`", inline=True)
     division_power = division_power_lookup(role.id) if division_power_lookup else 0.0
     embed.add_field(name="Puissance d'équipe", value=f"`{division_power:.1f}`", inline=True)
     embed.add_field(name="Staff", value=team_staff_mentions(guild, data), inline=False)
@@ -296,14 +306,14 @@ def resolve_duel(winner_name: str, points: int, active_duel: dict[str, Any] | No
             "Aucune victoire ou défaite n'a été enregistrée."
         ), None
 
-    winner[1]["wins"] += 1
-    for loser_key in losers:
-        teams["teams"][loser_key]["losses"] += 1
+    month_key = str(current_month())
+    winner_monthly = winner[1].setdefault("monthly_wins", {})
+    winner_monthly[month_key] = int(winner_monthly.get(month_key, 0)) + 1
     save_teams()
 
     return True, (
         f"Victoire de {winner_display} ! +{points} point(s). "
-        f"Défaite enregistrée pour {loser_display}."
+        f"Victoire mensuelle enregistrée (mois {current_month()}) pour {winner_display}."
     ), None
 
 

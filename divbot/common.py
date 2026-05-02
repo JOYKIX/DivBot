@@ -204,6 +204,20 @@ def normalize_config_data() -> None:
         config["max_team_members"] = 0
         changed = True
 
+    if "current_month" not in config:
+        config["current_month"] = 1
+        changed = True
+    else:
+        try:
+            normalized_month = int(config["current_month"])
+        except (TypeError, ValueError):
+            normalized_month = 1
+        if normalized_month < 1:
+            normalized_month = 1
+        if config["current_month"] != normalized_month:
+            config["current_month"] = normalized_month
+            changed = True
+
     raw_loser_gif_urls = config.get("loser_gif_urls", [])
     normalized_loser_gif_urls: list[str] = []
     if isinstance(raw_loser_gif_urls, list):
@@ -271,17 +285,26 @@ def normalize_team_data() -> None:
         if "emoji" not in team_data:
             team_data["emoji"] = "🏷️"
             changed = True
-        if "wins" not in team_data:
-            team_data["wins"] = 0
+        if "monthly_wins" not in team_data or not isinstance(team_data["monthly_wins"], dict):
+            team_data["monthly_wins"] = {"1": 0}
             changed = True
-        elif not isinstance(team_data["wins"], int):
-            team_data["wins"] = normalize_int(team_data["wins"], 0)
+        else:
+            normalized_monthly_wins: dict[str, int] = {}
+            for month, wins in team_data["monthly_wins"].items():
+                month_key = str(month).strip()
+                if not month_key.isdigit():
+                    continue
+                normalized_monthly_wins[month_key] = max(0, normalize_int(wins, 0))
+            if not normalized_monthly_wins:
+                normalized_monthly_wins = {"1": 0}
+            if normalized_monthly_wins != team_data["monthly_wins"]:
+                team_data["monthly_wins"] = normalized_monthly_wins
+                changed = True
+        if "wins" in team_data:
+            del team_data["wins"]
             changed = True
-        if "losses" not in team_data:
-            team_data["losses"] = 0
-            changed = True
-        elif not isinstance(team_data["losses"], int):
-            team_data["losses"] = normalize_int(team_data["losses"], 0)
+        if "losses" in team_data:
+            del team_data["losses"]
             changed = True
         if "captain_id" not in team_data:
             team_data["captain_id"] = None

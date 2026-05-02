@@ -467,7 +467,7 @@ roulette_russe_locks: dict[int, asyncio.Lock] = {}
 team_spam_punishments: dict[str, dict[str, dict[str, object]]] = load_data(
     TEAM_SPAM_PUNISHMENTS_KEY, {"members": {}}
 )
-team_record_snapshot: dict[str, dict[str, int]] = {}
+team_monthly_snapshot: dict[str, int] = {}
 
 if not isinstance(leaderboard_state, dict):
     leaderboard_state = {"channels": {}}
@@ -1264,20 +1264,20 @@ async def announce_team_points(team_name: str, points: int, *, reason: str | Non
         return
 
 
-def snapshot_team_record_state() -> dict[str, dict[str, int]]:
-    state: dict[str, dict[str, int]] = {}
+def snapshot_team_monthly_wins_state() -> dict[str, int]:
+    month_key = str(max(1, int(config.get("current_month", 1))))
+    state: dict[str, int] = {}
     for team_name, team_data in teams.get("teams", {}).items():
         if not isinstance(team_data, dict):
             continue
+        monthly_wins = team_data.get("monthly_wins", {})
+        if not isinstance(monthly_wins, dict):
+            state[team_name] = 0
+            continue
         try:
-            wins = int(team_data.get("wins", 0))
+            state[team_name] = max(0, int(monthly_wins.get(month_key, 0)))
         except (TypeError, ValueError):
-            wins = 0
-        try:
-            losses = int(team_data.get("losses", 0))
-        except (TypeError, ValueError):
-            losses = 0
-        state[team_name] = {"wins": max(0, wins), "losses": max(0, losses)}
+            state[team_name] = 0
     return state
 
 
@@ -1312,50 +1312,19 @@ def get_loser_gif_urls() -> list[str]:
     return [url for url in cleaned_urls if url.startswith(("http://", "https://"))]
 
 
-async def announce_team_loss(team_name: str, defeats: int = 1) -> None:
-    if defeats <= 0:
-        return
-    guild = discord_bot.get_guild(GUILD_ID)
-    if guild is None:
-        return
-    team_channel = get_team_channel_by_name(guild, team_name)
-    if team_channel is None:
-        return
-    loser_gif_urls = get_loser_gif_urls()
-    if not loser_gif_urls:
-        return
-    loser_gif_url = random.choice(loser_gif_urls)
-    try:
-        await team_channel.send(
-            f"{defeats} défaites… au moins vous êtes constants, c’est déjà ça.\n{loser_gif_url}"
-            if defeats > 1
-            else f"Défaite… belle coordination, chacun a bien perdu de son côté.\n{loser_gif_url}"
-        )
-    except discord.HTTPException:
-        return
-
-
-async def announce_team_record_changes() -> None:
-    global team_record_snapshot
-    current_snapshot = snapshot_team_record_state()
-    previous_snapshot = team_record_snapshot
-    team_record_snapshot = current_snapshot
-
-    all_team_names = set(previous_snapshot) | set(current_snapshot)
-    for team_name in sorted(all_team_names):
-        current_entry = current_snapshot.get(team_name, {"wins": 0, "losses": 0})
-        previous_entry = previous_snapshot.get(team_name, {"wins": 0, "losses": 0})
-        win_delta = current_entry["wins"] - previous_entry["wins"]
-        loss_delta = current_entry["losses"] - previous_entry["losses"]
-
+async def announce_team_monthly_win_changes() -> None:
+    global team_monthly_snapshot
+    current_snapshot = snapshot_team_monthly_wins_state()
+    previous_snapshot = team_monthly_snapshot
+    team_monthly_snapshot = current_snapshot
+    for team_name in sorted(set(previous_snapshot) | set(current_snapshot)):
+        win_delta = current_snapshot.get(team_name, 0) - previous_snapshot.get(team_name, 0)
         if win_delta > 0:
             await announce_team_victory(team_name, win_delta)
-        if loss_delta > 0:
-            await announce_team_loss(team_name, loss_delta)
 
 
-team_record_snapshot = snapshot_team_record_state()
-register_team_update_callback(announce_team_record_changes)
+team_monthly_snapshot = snapshot_team_monthly_wins_state()
+register_team_update_callback(announce_team_monthly_win_changes)
 
 
 class RouletteRusseJoinView(discord.ui.View):
@@ -1591,8 +1560,7 @@ async def team_create(
         "role_id": role.id,
         "points": 0,
         "emoji": emoji,
-        "wins": 0,
-        "losses": 0,
+        "monthly_wins": {"1": 0},
         "captain_id": None,
         "vice_captain_id": None,
         "motto": motto.strip(),
@@ -1854,103 +1822,47 @@ async def team_points(interaction: discord.Interaction, role: discord.Role, amou
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
 
-@team_group.command(name="record", description="Modifier le nombre de victoires et/ou défaites d'une équipe")
-@app_commands.describe(
-    role="Rôle de l'équipe",
-    wins="Nouveau total de victoires (optionnel)",
-    losses="Nouveau total de défaites (optionnel)",
-)
+@team_group.command(name="reset", description="Clôturer le mois: reset points + victoire de la team + mois suivant")
+@app_commands.describe(role="Rôle de la team gagnante du mois")
 @app_commands.check(is_discord_moderator)
-async def team_record(
-    interaction: discord.Interaction,
-    role: discord.Role,
-    wins: int | None = None,
-    losses: int | None = None,
-) -> None:
-    name = role.name.lower()
-    if name not in teams["teams"]:
-        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
-        return
-
-    if wins is None and losses is None:
+async def team_reset(interaction: discord.Interaction, role: discord.Role) -> None:
+    if not teams["teams"]:
         await send_interaction_embed(
             interaction,
-            "Aucune modification",
-            "Tu dois renseigner `wins`, `losses`, ou les deux.",
-            ERROR_COLOR,
+            "Aucune équipe",
+            "Aucune équipe n'est configurée à réinitialiser.",
+            WARNING_COLOR,
             ephemeral=True,
         )
         return
 
-    if wins is not None and wins < 0:
-        await send_interaction_embed(interaction, "Valeur invalide", "Le nombre de victoires doit être supérieur ou égal à 0.", ERROR_COLOR, ephemeral=True)
-        return
-
-    if losses is not None and losses < 0:
-        await send_interaction_embed(interaction, "Valeur invalide", "Le nombre de défaites doit être supérieur ou égal à 0.", ERROR_COLOR, ephemeral=True)
-        return
-
-    team_data = teams["teams"][name]
-    updates: list[str] = []
-    if wins is not None:
-        team_data["wins"] = wins
-        updates.append(f"Victoires → **{wins}**")
-
-    if losses is not None:
-        team_data["losses"] = losses
-        updates.append(f"Défaites → **{losses}**")
-
-    save_teams()
-    await send_interaction_embed(
-        interaction,
-        "Bilan mis à jour",
-        f"**{role.name}**\n" + "\n".join(f"• {update}" for update in updates),
-        SUCCESS_COLOR,
-    )
-
-
-@team_group.command(name="reset", description="Réinitialiser une équipe (ou toutes si aucun rôle n'est indiqué)")
-@app_commands.describe(role="Rôle de l'équipe (optionnel : vide pour tout réinitialiser)")
-@app_commands.check(is_discord_moderator)
-async def team_reset(interaction: discord.Interaction, role: discord.Role | None = None) -> None:
-    if role is None:
-        if not teams["teams"]:
-            await send_interaction_embed(
-                interaction,
-                "Aucune équipe",
-                "Aucune équipe n'est configurée à réinitialiser.",
-                WARNING_COLOR,
-                ephemeral=True,
-            )
-            return
-
-        for team_data in teams["teams"].values():
-            team_data["points"] = 0
-            team_data["wins"] = 0
-            team_data["losses"] = 0
-        save_teams()
-        await send_interaction_embed(
-            interaction,
-            "Statistiques réinitialisées",
-            "Toutes les équipes ont maintenant **0 point**, **0 victoire** et **0 défaite**.",
-            SUCCESS_COLOR,
-        )
-        return
-
     name = role.name.lower()
     if name not in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
         return
 
+    current_month = max(1, int(config.get("current_month", 1)))
+    month_key = str(current_month)
+
+    for each_team_data in teams["teams"].values():
+        each_team_data["points"] = 0
+
     team_data = teams["teams"][name]
-    team_data["points"] = 0
-    team_data["wins"] = 0
-    team_data["losses"] = 0
+    monthly_wins = team_data.setdefault("monthly_wins", {})
+    monthly_wins[month_key] = int(monthly_wins.get(month_key, 0)) + 1
+
+    next_month = current_month + 1
+    config["current_month"] = next_month
     save_teams()
+    save_config()
     await send_interaction_embed(
         interaction,
-        "Statistiques réinitialisées",
-        f"**{role.name}** a maintenant **0 point**, **0 victoire** et **0 défaite**.",
+        "Mois clôturé",
+        (
+            f"🏆 **{role.name}** gagne la victoire du **mois {current_month}**.\n"
+            "Toutes les équipes repassent à **0 point**.\n"
+            f"➡️ Passage au **mois {next_month}**."
+        ),
         SUCCESS_COLOR,
     )
 
@@ -2210,70 +2122,6 @@ async def team_membres(interaction: discord.Interaction, member: discord.Member 
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
-@discord_bot.tree.command(name="divwar", description="Lancer un duel entre deux divisions", guild=guild_object)
-@app_commands.describe(team1="Première division", team2="Deuxième division")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
-async def divwar_command(interaction: discord.Interaction, team1: discord.Role, team2: discord.Role) -> None:
-    guild = interaction.guild
-    if guild is None:
-        await send_interaction_embed(interaction, "Erreur", "Cette commande doit être utilisée dans le serveur.", ERROR_COLOR, ephemeral=True)
-        return
-
-    if team1.id == team2.id:
-        await send_interaction_embed(
-            interaction,
-            "Paramètres invalides",
-            "Choisis deux divisions différentes pour lancer un duel.",
-            ERROR_COLOR,
-            ephemeral=True,
-        )
-        return
-
-    missing_divisions: list[str] = []
-    if get_team_entry_by_role(team1) is None:
-        missing_divisions.append(team1.mention)
-    if get_team_entry_by_role(team2) is None:
-        missing_divisions.append(team2.mention)
-    if missing_divisions:
-        await send_interaction_embed(
-            interaction,
-            "Division introuvable",
-            f"Division(s) non enregistrée(s) : {', '.join(missing_divisions)}.",
-            ERROR_COLOR,
-            ephemeral=True,
-        )
-        return
-
-    await interaction.response.defer(thinking=True)
-
-    division_1 = discord_bot.division_war.build_division_profile(team1.id, team1.name)
-    division_2 = discord_bot.division_war.build_division_profile(team2.id, team2.name)
-    division_1_members = discord_bot.division_war.get_members_by_division(team1.id)
-    division_2_members = discord_bot.division_war.get_members_by_division(team2.id)
-    duel_result = discord_bot.division_war.simulate_division_war(
-        division_1,
-        division_2,
-        user_label_resolver=lambda user_id: _division_war_member_label(guild, user_id),
-    )
-
-    winner_role = guild.get_role(duel_result.winner_division_id) if duel_result.winner_division_id else None
-    winner_label = winner_role.mention if winner_role is not None else "Aucun vainqueur"
-    summary_lines = [
-        f"🛡️ **{team1.mention}** • Puissance: `{division_1.division_power:.1f}` • Membres: `{len(division_1_members)}`",
-        f"🛡️ **{team2.mention}** • Puissance: `{division_2.division_power:.1f}` • Membres: `{len(division_2_members)}`",
-        f"🏁 **Vainqueur** : {winner_label}",
-        f"🔁 **Rounds joués** : `{duel_result.rounds}`",
-    ]
-    live_embed = _build_divwar_embed(
-        title="⚔️ Duel de divisions en direct",
-        summary_lines=summary_lines,
-        combat_lines=[],
-        status_line="🟡 **Préparation du combat...**",
-    )
-    live_message = await interaction.followup.send(embed=live_embed, ephemeral=False, wait=True)
-    await _animate_division_war_message(message=live_message, summary_lines=summary_lines, duel_log=duel_result.log)
-
-
 @team_group.command(name="captain", description="Définir le capitaine d'une team")
 @app_commands.describe(role="Rôle de la team", member="Membre à nommer capitaine")
 @app_commands.check(is_discord_moderator)
@@ -2339,7 +2187,6 @@ async def team_vicecaptain(interaction: discord.Interaction, role: discord.Role,
 @team_delete.error
 @team_edit.error
 @team_points.error
-@team_record.error
 @team_reset.error
 @team_limit.error
 @pardon.error

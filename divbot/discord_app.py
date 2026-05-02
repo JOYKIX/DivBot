@@ -1822,6 +1822,60 @@ async def team_points(interaction: discord.Interaction, role: discord.Role, amou
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
 
+@team_group.command(name="wins", description="Ajouter ou retirer des victoires mensuelles à une équipe")
+@app_commands.describe(
+    role="Rôle de l'équipe",
+    action="add = ajouter, remove = retirer",
+    amount="Nombre de victoires à modifier",
+    month="Mois ciblé (vide = mois en cours)",
+)
+@app_commands.check(is_discord_moderator)
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="add", value="add"),
+        app_commands.Choice(name="remove", value="remove"),
+    ]
+)
+async def team_wins(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    action: app_commands.Choice[str],
+    amount: app_commands.Range[int, 1, 100],
+    month: app_commands.Range[int, 1, 999] | None = None,
+) -> None:
+    name = role.name.lower()
+    if name not in teams["teams"]:
+        await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
+        return
+
+    target_month = month if month is not None else max(1, int(config.get("current_month", 1)))
+    month_key = str(target_month)
+    team_data = teams["teams"][name]
+    monthly_wins = team_data.setdefault("monthly_wins", {})
+    current_value = max(0, int(monthly_wins.get(month_key, 0)))
+
+    if action.value == "add":
+        new_value = current_value + amount
+        action_label = "ajoutées"
+        verb = "reçoit"
+    else:
+        new_value = max(0, current_value - amount)
+        action_label = "retirées"
+        verb = "perd"
+
+    monthly_wins[month_key] = new_value
+    save_teams()
+    await send_interaction_embed(
+        interaction,
+        "Victoires mensuelles mises à jour",
+        (
+            f"✅ **{role.name}** {verb} **{amount}** victoire(s) pour le **mois {target_month}**.\n"
+            f"Valeur actuelle : **{new_value}** victoire(s) ({action_label})."
+        ),
+        SUCCESS_COLOR,
+    )
+
+
 @team_group.command(name="reset", description="Clôturer le mois: reset points + victoire de la team + mois suivant")
 @app_commands.describe(role="Rôle de la team gagnante du mois")
 @app_commands.check(is_discord_moderator)

@@ -153,7 +153,7 @@ def leaderboard_embed(
 
     embed = build_embed(
         "🏆 Leaderboard des équipes",
-        "Classement général des teams du serveur.",
+        f"Classement général des teams du serveur.\n📆 **Mois en cours : {current_month()}**",
         INFO_COLOR,
     )
 

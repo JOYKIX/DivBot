@@ -116,6 +116,12 @@ def team_month_wins(team_data: dict[str, Any], month: int | None = None) -> int:
 
 
 def team_total_wins(team_data: dict[str, Any]) -> int:
+    if "total_wins" in team_data:
+        try:
+            return max(0, int(team_data.get("total_wins", 0)))
+        except (TypeError, ValueError):
+            return 0
+
     monthly_wins = team_data.get("monthly_wins", {})
     if not isinstance(monthly_wins, dict):
         return 0
@@ -127,6 +133,10 @@ def team_total_wins(team_data: dict[str, Any]) -> int:
         except (TypeError, ValueError):
             continue
     return total_wins
+
+
+def add_team_total_wins(team_data: dict[str, Any], amount: int = 1) -> None:
+    team_data["total_wins"] = max(0, team_total_wins(team_data) + amount)
 
 
 def team_motto(team_data: dict[str, Any]) -> str:
@@ -257,6 +267,7 @@ def team_detail_embed(
     embed.add_field(name="Effectif", value=f"`{len(role.members)}`", inline=True)
     embed.add_field(name="Points", value=f"`{data['points']}`", inline=True)
     embed.add_field(name=f"Victoires mois {current_month()}", value=f"`{team_month_wins(data)}`", inline=True)
+    embed.add_field(name="Victoires totales", value=f"`{team_total_wins(data)}`", inline=True)
     division_power = division_power_lookup(role.id) if division_power_lookup else 0.0
     embed.add_field(name="Puissance d'équipe", value=f"`{division_power:.1f}`", inline=True)
     embed.add_field(name="Staff", value=team_staff_mentions(guild, data), inline=False)
@@ -322,11 +333,12 @@ def resolve_duel(winner_name: str, points: int, active_duel: dict[str, Any] | No
     month_key = str(current_month())
     winner_monthly = winner[1].setdefault("monthly_wins", {})
     winner_monthly[month_key] = int(winner_monthly.get(month_key, 0)) + 1
+    add_team_total_wins(winner[1])
     save_teams()
 
     return True, (
         f"Victoire de {winner_display} ! +{points} point(s). "
-        f"Victoire mensuelle enregistrée (mois {current_month()}) pour {winner_display}."
+        f"Victoire mensuelle enregistrée (mois {current_month()}) et victoire totale ajoutée pour {winner_display}."
     ), None
 
 

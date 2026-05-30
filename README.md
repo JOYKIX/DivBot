@@ -45,6 +45,7 @@ Le code est maintenant séparé en modules simples :
 - `/team edit`
 - `/team motto`
 - `/team points`
+- `/team wins`
 - `/team reset`
 - `/team limit`
 - `/team pardon`

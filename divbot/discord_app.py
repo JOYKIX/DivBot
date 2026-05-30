@@ -34,6 +34,7 @@ from divbot.common import (
     unlink_discord_user,
 )
 from divbot.team_logic import (
+    add_team_total_wins,
     build_embed,
     current_team_member_limit,
     get_team_entry_by_role,
@@ -42,6 +43,7 @@ from divbot.team_logic import (
     team_detail_embed,
     team_member_limit_label,
     team_overview_embed,
+    team_total_wins,
 )
 from division_war import DivisionWarSystem
 
@@ -1561,6 +1563,7 @@ async def team_create(
         "points": 0,
         "emoji": emoji,
         "monthly_wins": {"1": 0},
+        "total_wins": 0,
         "captain_id": None,
         "vice_captain_id": None,
         "motto": motto.strip(),
@@ -1822,12 +1825,11 @@ async def team_points(interaction: discord.Interaction, role: discord.Role, amou
     await send_interaction_embed(interaction, "Points ajoutés", f"**{role.name}** reçoit **{amount}** point(s).", SUCCESS_COLOR)
 
 
-@team_group.command(name="wins", description="Ajouter ou retirer des victoires mensuelles à une équipe")
+@team_group.command(name="wins", description="Ajouter ou retirer des victoires totales à une équipe")
 @app_commands.describe(
     role="Rôle de l'équipe",
     action="add = ajouter, remove = retirer",
-    amount="Nombre de victoires à modifier",
-    month="Mois ciblé (vide = mois en cours)",
+    amount="Nombre de victoires totales à modifier",
 )
 @app_commands.check(is_discord_moderator)
 @app_commands.choices(
@@ -1841,18 +1843,14 @@ async def team_wins(
     role: discord.Role,
     action: app_commands.Choice[str],
     amount: app_commands.Range[int, 1, 100],
-    month: app_commands.Range[int, 1, 999] | None = None,
 ) -> None:
     name = role.name.lower()
     if name not in teams["teams"]:
         await send_interaction_embed(interaction, "Équipe introuvable", "Cette équipe n'existe pas.", ERROR_COLOR, ephemeral=True)
         return
 
-    target_month = month if month is not None else max(1, int(config.get("current_month", 1)))
-    month_key = str(target_month)
     team_data = teams["teams"][name]
-    monthly_wins = team_data.setdefault("monthly_wins", {})
-    current_value = max(0, int(monthly_wins.get(month_key, 0)))
+    current_value = team_total_wins(team_data)
 
     if action.value == "add":
         new_value = current_value + amount
@@ -1863,14 +1861,15 @@ async def team_wins(
         action_label = "retirées"
         verb = "perd"
 
-    monthly_wins[month_key] = new_value
+    team_data["total_wins"] = new_value
     save_teams()
     await send_interaction_embed(
         interaction,
-        "Victoires mensuelles mises à jour",
+        "Victoires totales mises à jour",
         (
-            f"✅ **{role.name}** {verb} **{amount}** victoire(s) pour le **mois {target_month}**.\n"
-            f"Valeur actuelle : **{new_value}** victoire(s) ({action_label})."
+            f"✅ **{role.name}** {verb} **{amount}** victoire(s) totale(s).\n"
+            f"Valeur totale actuelle : **{new_value}** victoire(s) ({action_label}).\n"
+            "Les victoires du mois en cours ne sont pas modifiées par cette commande."
         ),
         SUCCESS_COLOR,
     )
@@ -1904,6 +1903,7 @@ async def team_reset(interaction: discord.Interaction, role: discord.Role) -> No
     team_data = teams["teams"][name]
     monthly_wins = team_data.setdefault("monthly_wins", {})
     monthly_wins[month_key] = int(monthly_wins.get(month_key, 0)) + 1
+    add_team_total_wins(team_data)
 
     next_month = current_month + 1
     config["current_month"] = next_month

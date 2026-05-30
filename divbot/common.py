@@ -300,6 +300,19 @@ def normalize_team_data() -> None:
             if normalized_monthly_wins != team_data["monthly_wins"]:
                 team_data["monthly_wins"] = normalized_monthly_wins
                 changed = True
+
+        legacy_total_wins = team_data.get("wins")
+        monthly_total_wins = sum(team_data["monthly_wins"].values())
+        if "total_wins" not in team_data:
+            team_data["total_wins"] = max(0, normalize_int(legacy_total_wins, monthly_total_wins))
+            changed = True
+        elif not isinstance(team_data["total_wins"], int):
+            team_data["total_wins"] = max(0, normalize_int(team_data["total_wins"], monthly_total_wins))
+            changed = True
+        elif team_data["total_wins"] < 0:
+            team_data["total_wins"] = 0
+            changed = True
+
         if "wins" in team_data:
             del team_data["wins"]
             changed = True
